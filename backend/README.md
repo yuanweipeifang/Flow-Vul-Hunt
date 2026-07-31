@@ -14,7 +14,6 @@
 - 独立证据验证智能体，模型引用必须存在于原始或解码 Payload；
 - 基于真实 Host 和攻击类型的 Payload 活动簇；
 - 自然语言狩猎及确定性降级；
-- 人工标注；
 - 基于真实事件证据的调查报告；
 - 模型调用状态、Token、延迟、Prompt 版本及错误审计。
 
@@ -125,9 +124,19 @@ alembic upgrade head
 
 ## 启动
 
+在仓库根目录运行唯一的后端启动入口：
+
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+python run_backend.py
 ```
+
+默认监听 `127.0.0.1:8000`，实时输出访问日志、请求 ID、状态码和耗时。开发时启用热重载：
+
+```bash
+python run_backend.py --reload --log-level debug
+```
+
+使用 `--host`、`--port` 和 `--log-level` 可以覆盖默认启动参数。
 
 接口文档：
 
@@ -173,7 +182,6 @@ curl -X POST http://localhost:8000/api/datasets/DATASET_ID/analyze \
 GET /api/events?dataset_id=...&min_risk=60
 GET /api/events/{event_id}
 POST /api/events/{event_id}/reanalyze
-POST /api/events/{event_id}/annotations
 ```
 
 ### 4. 查询事件簇与生成报告
@@ -220,6 +228,60 @@ curl -X POST http://localhost:8000/api/vulnerabilities/VULNERABILITY_ID/validate
 ```
 
 验证结果通过 `GET /api/validation-runs/RUN_ID` 查询；系统只保存请求摘要、响应摘要、状态码、有限 Header 和截断后的响应片段。
+
+### 7. 项目私有多 Agent 协同运行时
+
+系统提供项目内隔离的多 Agent 协同后端。默认角色包括 `coordinator`、`payload_analyst`、`hunt_interpreter`、`vulnerability_researcher`、`evidence_verifier` 和 `report_generator`。Hermes 或模型不可用时，后端仍会使用本地 planner 跑完整协作轨迹，并在响应中标记 `llm_used=false`。
+
+```bash
+AGENT_ENABLED=true
+AGENT_COLLABORATION_ENABLED=true
+AGENT_MAX_PARALLELISM=3
+AGENT_REQUIRE_VERIFIER=true
+FVH_HERMES_CONFIG_DIR=.hermes/flow-vul-hunt
+FVH_HERMES_PLUGIN_DIR=.hermes/plugins/flow-vul-hunt
+AGENT_REQUIRE_CONFIRMATION=true
+```
+
+检查 Agent、Hermes 和协作状态：
+
+```text
+GET /api/agent/status
+GET /api/agent/hermes/smoke
+GET /api/agent/sessions
+GET /api/agent/sessions/SESSION_ID
+GET /api/agent/sessions/SESSION_ID/trace
+```
+
+发起一次编排请求：
+
+```bash
+curl -X POST http://localhost:8000/api/agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{"dataset_id":"DATASET_ID","message":"分析这个数据集的高危漏洞并过滤误报","auto_execute":false}'
+```
+
+`/api/agent/chat` 会返回 `collaboration_mode`、`agents`、`consensus`、`evidence_gaps` 和 `llm_used`。每个 Agent 的任务、依赖、证据引用和输出会落库到协作 trace 中，便于观测和审计。
+
+Hermes 插件和系统提示词位于仓库内 `.hermes/`，不会读写用户级 Hermes 配置。`/api/agent/hermes/smoke` 只做静态就绪检查，不触发外网模型调用；只有环境已安装 Hermes 且已有 provider key 时，才能单独执行真实模型 E2E 验证。高风险工具默认只生成计划，必须确认后才执行。
+
+确认执行某个等待确认的工具调用：
+
+```bash
+curl -X POST http://localhost:8000/api/agent/sessions/SESSION_ID/confirm \
+  -H "Content-Type: application/json" \
+  -d '{"tool_call_ids":["tool-4"]}'
+```
+
+保存和复用狩猎查询：
+
+```text
+POST /api/hunt/saved
+GET  /api/hunt/saved
+POST /api/hunt/saved/SAVED_QUERY_ID/run
+```
+
+`run_backend.py` 会通过后端配置自动加载 `backend/.env` 和 `backend/.env.agent`。
 
 ## 测试
 

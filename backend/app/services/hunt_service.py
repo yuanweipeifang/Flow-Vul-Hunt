@@ -70,8 +70,8 @@ def interpret_hunt(question: str, use_llm: bool) -> tuple[HuntFilters, bool, str
 
 
 def execute_hunt(
-    db: Session, filters: HuntFilters, dataset_id: str | None, limit: int
-) -> list[PayloadEvent]:
+    db: Session, filters: HuntFilters, dataset_id: str | None, limit: int, exclude_suppressed: bool = True
+) -> tuple[list[PayloadEvent], dict[str, int]]:
     statement: Select = select(PayloadEvent)
     if filters.attack_type:
         statement = statement.join(DetectionFinding).where(
@@ -96,6 +96,24 @@ def execute_hunt(
         )
     if filters.is_binary is not None:
         statement = statement.where(PayloadEvent.is_binary == filters.is_binary)
-    return list(
-        db.scalars(statement.distinct().order_by(PayloadEvent.risk_score.desc()).limit(limit)).all()
+    fetch_limit = limit if not exclude_suppressed else min(max(limit * 5, limit), 1000)
+    rows = list(
+        db.scalars(
+            statement.distinct()
+            .order_by(PayloadEvent.risk_score.desc())
+            .limit(fetch_limit)
+        ).all()
     )
+    if not exclude_suppressed:
+        return rows[:limit], {"matched_events": len(rows[:limit]), "suppressed_events": 0}
+
+    events: list[PayloadEvent] = []
+    suppressed = 0
+    for event in rows:
+        if event.verdict == "benign":
+            suppressed += 1
+            continue
+        events.append(event)
+        if len(events) >= limit:
+            break
+    return events, {"matched_events": len(events) + suppressed, "suppressed_events": suppressed}

@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 
 from ..detection.rules import run_custom_rules, run_rules, validate_rule_pattern
 from ..ingestion.payload_parser import parse_payload
-from ..models import CustomRule
-from ..schemas import CustomRuleCreate, CustomRuleUpdate
+from ..models import CustomRule, PayloadEvent
+from ..schemas import CustomRuleCreate, CustomRuleUpdate, RuleDryRunResult, RuleDryRunSample
+from .analysis_service import _as_parsed
 
 
 def create_custom_rule(db: Session, request: CustomRuleCreate) -> CustomRule:
@@ -40,3 +41,42 @@ def test_rules_against_payload(db: Session, payload: str, include_builtin: bool 
         matches.extend(run_rules(parsed))
     matches.extend(run_custom_rules(parsed, enabled_custom_rules(db)))
     return parsed.parse_status, parsed.is_binary, matches
+
+
+def dry_run_custom_rule(
+    db: Session,
+    request: CustomRuleCreate,
+    dataset_id: str | None = None,
+    limit: int = 500,
+) -> RuleDryRunResult:
+    validate_rule_pattern(request.pattern)
+    rule = CustomRule(**request.model_dump())
+    statement = select(PayloadEvent)
+    if dataset_id:
+        statement = statement.where(PayloadEvent.dataset_id == dataset_id)
+    events = list(db.scalars(statement.order_by(PayloadEvent.created_at.desc()).limit(limit)).all())
+    samples: list[RuleDryRunSample] = []
+    matched = 0
+    for event in events:
+        matches = run_custom_rules(_as_parsed(event), [rule])
+        if not matches:
+            continue
+        matched += 1
+        if len(samples) < 20:
+            samples.append(
+                RuleDryRunSample(
+                    event_id=event.id,
+                    dataset_id=event.dataset_id,
+                    row_number=event.row_number,
+                    host=event.host,
+                    path=event.path,
+                    matched_fragment=matches[0].matched_fragment,
+                )
+            )
+    tested = len(events)
+    return RuleDryRunResult(
+        tested=tested,
+        matched=matched,
+        match_rate=round(matched / tested, 4) if tested else 0.0,
+        samples=samples,
+    )

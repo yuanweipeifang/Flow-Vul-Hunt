@@ -5,13 +5,15 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..audit import audit_log
 from ..database import get_db
 from ..ingestion.csv_reader import DatasetFormatError
 from ..models import AnalysisJob, Dataset, DetectionFinding, PayloadEvent
-from ..schemas import AnalyzeRequest, DatasetCompareResult, DatasetOut, JobOut
+from ..schemas import AnalyzeRequest, BatchAnalyzeItem, BatchAnalyzeRequest, BatchAnalyzeResult, DatasetCompareResult, DatasetOut, JobOut
 from ..services.analysis_service import run_analysis_job
 from ..services.comparison_service import compare_datasets
 from ..services.dataset_service import ingest_dataset
+from ..security import Actor, get_actor, require_roles
 
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -22,6 +24,7 @@ async def upload_dataset(
     file: UploadFile = File(...),
     name: str | None = Form(default=None),
     db: Session = Depends(get_db),
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
 ) -> Dataset:
     filename = file.filename or "dataset.csv"
     if not filename.lower().endswith(".csv"):
@@ -31,7 +34,11 @@ async def upload_dataset(
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="file exceeds MAX_UPLOAD_BYTES")
     try:
-        return ingest_dataset(db, filename, name, content)
+        dataset = ingest_dataset(db, filename, name, content)
+        audit_log(db, "dataset.upload", "dataset", dataset.id, {"filename": filename})
+        db.commit()
+        db.refresh(dataset)
+        return dataset
     except DatasetFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -41,6 +48,7 @@ def list_datasets(
     dataset_status: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
+    _actor: Actor = Depends(get_actor),
 ) -> list[Dataset]:
     statement = select(Dataset)
     if dataset_status:
@@ -53,6 +61,7 @@ def compare_dataset_pair(
     baseline_dataset_id: str,
     candidate_dataset_id: str,
     db: Session = Depends(get_db),
+    _actor: Actor = Depends(get_actor),
 ) -> dict:
     if baseline_dataset_id == candidate_dataset_id:
         raise HTTPException(status_code=422, detail="baseline and candidate datasets must be different")
@@ -64,7 +73,7 @@ def compare_dataset_pair(
 
 
 @router.get("/{dataset_id}", response_model=DatasetOut)
-def get_dataset(dataset_id: str, db: Session = Depends(get_db)) -> Dataset:
+def get_dataset(dataset_id: str, db: Session = Depends(get_db), _actor: Actor = Depends(get_actor)) -> Dataset:
     dataset = db.get(Dataset, dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail="dataset not found")
@@ -72,7 +81,7 @@ def get_dataset(dataset_id: str, db: Session = Depends(get_db)) -> Dataset:
 
 
 @router.get("/{dataset_id}/stats")
-def dataset_stats(dataset_id: str, db: Session = Depends(get_db)) -> dict:
+def dataset_stats(dataset_id: str, db: Session = Depends(get_db), _actor: Actor = Depends(get_actor)) -> dict:
     if not db.get(Dataset, dataset_id):
         raise HTTPException(status_code=404, detail="dataset not found")
     verdicts = dict(
@@ -114,6 +123,7 @@ def analyze_dataset(
     request: AnalyzeRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
 ) -> AnalysisJob:
     dataset = db.get(Dataset, dataset_id)
     if not dataset:
@@ -134,14 +144,70 @@ def analyze_dataset(
         total=dataset.row_count,
     )
     db.add(job)
+    audit_log(db, "job.start", "dataset", dataset_id, {"job_id": job.id, "force": request.force})
     db.commit()
     db.refresh(job)
     background_tasks.add_task(run_analysis_job, job.id)
     return job
 
 
+@router.post("/analyze-batch", response_model=BatchAnalyzeResult, status_code=status.HTTP_202_ACCEPTED)
+def analyze_datasets_batch(
+    request: BatchAnalyzeRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
+) -> BatchAnalyzeResult:
+    items: list[BatchAnalyzeItem] = []
+    queued = 0
+    skipped = 0
+    for dataset_id in request.dataset_ids:
+        dataset = db.get(Dataset, dataset_id)
+        if not dataset:
+            items.append(BatchAnalyzeItem(dataset_id=dataset_id, status="not_found", message="dataset not found"))
+            skipped += 1
+            continue
+        running = db.scalar(
+            select(AnalysisJob).where(
+                AnalysisJob.dataset_id == dataset_id,
+                AnalysisJob.status.in_(["queued", "running"]),
+            )
+        )
+        if running:
+            item_status = "skipped" if request.skip_running else "conflict"
+            items.append(
+                BatchAnalyzeItem(
+                    dataset_id=dataset_id,
+                    status=item_status,
+                    job=running,
+                    message="analysis already running",
+                )
+            )
+            skipped += 1
+            continue
+        job = AnalysisJob(
+            dataset_id=dataset_id,
+            use_llm=request.use_llm,
+            llm_scope=request.llm_scope,
+            force=request.force,
+            total=dataset.row_count,
+        )
+        db.add(job)
+        db.flush()
+        audit_log(db, "job.start", "dataset", dataset_id, {"job_id": job.id, "force": request.force, "batch": True})
+        items.append(BatchAnalyzeItem(dataset_id=dataset_id, status="queued", job=job))
+        background_tasks.add_task(run_analysis_job, job.id)
+        queued += 1
+    db.commit()
+    return BatchAnalyzeResult(requested=len(request.dataset_ids), queued=queued, skipped=skipped, items=items)
+
+
 @router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_dataset(dataset_id: str, db: Session = Depends(get_db)) -> None:
+def delete_dataset(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
+) -> None:
     dataset = db.get(Dataset, dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail="dataset not found")
@@ -153,5 +219,6 @@ def delete_dataset(dataset_id: str, db: Session = Depends(get_db)) -> None:
     if running:
         raise HTTPException(status_code=409, detail="cannot delete a dataset while analysis is running")
     db.delete(dataset)
+    audit_log(db, "dataset.delete", "dataset", dataset_id, {"name": dataset.name})
     db.commit()
 

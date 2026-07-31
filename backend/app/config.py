@@ -10,15 +10,31 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env", override=False)
+load_dotenv(BASE_DIR / ".env.agent", override=True)
 
 PROVIDER_NAMES = ("deepseek", "bailian", "zhipu")
 DEFAULT_AGENT_ROUTES = {
+    "coordinator": ("bailian", "deepseek", "zhipu"),
     "payload_analyst": ("deepseek", "bailian", "zhipu"),
     "evidence_verifier": ("zhipu", "bailian", "deepseek"),
     "hunt_interpreter": ("bailian", "zhipu", "deepseek"),
+    "vulnerability_researcher": ("zhipu", "bailian", "deepseek"),
     "report_generator": ("bailian", "deepseek", "zhipu"),
+    "security_brain": ("bailian", "deepseek", "zhipu"),
     "connection_test": ("deepseek", "bailian", "zhipu"),
 }
+DEFAULT_AGENT_ALLOWED_TOOLS = (
+    "list_datasets",
+    "get_dataset",
+    "hunt_query",
+    "red_team_hypotheses",
+    "attack_surface_map",
+    "get_event",
+    "list_vulnerabilities",
+    "get_vulnerability_analysis",
+    "start_dataset_analysis",
+    "generate_incident_report",
+)
 
 
 def _int_env(name: str, default: int) -> int:
@@ -40,6 +56,36 @@ def _route_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     if not route:
         raise RuntimeError(f"{name} must contain at least one provider")
     return route
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _api_keys_env() -> dict[str, str]:
+    raw = os.getenv("API_KEYS", "")
+    keys: dict[str, str] = {}
+    for item in raw.split(","):
+        if not item.strip():
+            continue
+        token, _, role = item.partition(":")
+        token = token.strip()
+        role = (role.strip() or "analyst").lower()
+        if role not in {"admin", "analyst", "viewer"}:
+            raise RuntimeError("API_KEYS roles must be admin, analyst, or viewer")
+        if token:
+            keys[token] = role
+    return keys
+
+
+def _csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +112,19 @@ class Settings:
     llm_max_input_chars: int
     providers: dict[str, ProviderSettings]
     agent_routes: dict[str, tuple[str, ...]]
+    ingest_batch_size: int = 1000
+    auth_enabled: bool = False
+    api_keys: dict[str, str] | None = None
+    stuck_job_timeout_seconds: int = 15 * 60
+    agent_enabled: bool = False
+    agent_collaboration_enabled: bool = True
+    agent_max_steps: int = 12
+    agent_max_parallelism: int = 3
+    agent_require_verifier: bool = True
+    agent_require_confirmation: bool = True
+    agent_allowed_tools: tuple[str, ...] = DEFAULT_AGENT_ALLOWED_TOOLS
+    hermes_config_dir: str = ".hermes/flow-vul-hunt"
+    hermes_plugin_dir: str = ".hermes/plugins/flow-vul-hunt"
 
     @property
     def llm_enabled(self) -> bool:
@@ -113,14 +172,23 @@ def get_settings() -> Settings:
         "payload_analyst": _route_env(
             "LLM_ROUTE_PAYLOAD_ANALYST", DEFAULT_AGENT_ROUTES["payload_analyst"]
         ),
+        "coordinator": _route_env(
+            "LLM_ROUTE_COORDINATOR", DEFAULT_AGENT_ROUTES["coordinator"]
+        ),
         "evidence_verifier": _route_env(
             "LLM_ROUTE_EVIDENCE_VERIFIER", DEFAULT_AGENT_ROUTES["evidence_verifier"]
         ),
         "hunt_interpreter": _route_env(
             "LLM_ROUTE_HUNT_INTERPRETER", DEFAULT_AGENT_ROUTES["hunt_interpreter"]
         ),
+        "vulnerability_researcher": _route_env(
+            "LLM_ROUTE_VULNERABILITY_RESEARCHER", DEFAULT_AGENT_ROUTES["vulnerability_researcher"]
+        ),
         "report_generator": _route_env(
             "LLM_ROUTE_REPORT_GENERATOR", DEFAULT_AGENT_ROUTES["report_generator"]
+        ),
+        "security_brain": _route_env(
+            "LLM_ROUTE_SECURITY_BRAIN", DEFAULT_AGENT_ROUTES["security_brain"]
         ),
         "connection_test": DEFAULT_AGENT_ROUTES["connection_test"],
     }
@@ -130,9 +198,22 @@ def get_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL", default_db),
         max_upload_bytes=_int_env("MAX_UPLOAD_BYTES", 50 * 1024 * 1024),
         max_payload_chars=_int_env("MAX_PAYLOAD_CHARS", 100_000),
+        ingest_batch_size=_int_env("INGEST_BATCH_SIZE", 1000),
         llm_timeout_seconds=_int_env("LLM_TIMEOUT_SECONDS", 60),
         llm_max_retries=_int_env("LLM_MAX_RETRIES", 2),
         llm_max_input_chars=_int_env("LLM_MAX_INPUT_CHARS", 24_000),
+        auth_enabled=_bool_env("AUTH_ENABLED", False),
+        api_keys=_api_keys_env(),
+        stuck_job_timeout_seconds=_int_env("STUCK_JOB_TIMEOUT_SECONDS", 15 * 60),
+        agent_enabled=_bool_env("AGENT_ENABLED", False),
+        agent_collaboration_enabled=_bool_env("AGENT_COLLABORATION_ENABLED", True),
+        agent_max_steps=_int_env("AGENT_MAX_STEPS", 12),
+        agent_max_parallelism=max(1, _int_env("AGENT_MAX_PARALLELISM", 3)),
+        agent_require_verifier=_bool_env("AGENT_REQUIRE_VERIFIER", True),
+        agent_require_confirmation=_bool_env("AGENT_REQUIRE_CONFIRMATION", True),
+        agent_allowed_tools=_csv_env("AGENT_ALLOWED_TOOLS", DEFAULT_AGENT_ALLOWED_TOOLS),
+        hermes_config_dir=os.getenv("FVH_HERMES_CONFIG_DIR", ".hermes/flow-vul-hunt"),
+        hermes_plugin_dir=os.getenv("FVH_HERMES_PLUGIN_DIR", ".hermes/plugins/flow-vul-hunt"),
         providers=providers,
         agent_routes=routes,
     )

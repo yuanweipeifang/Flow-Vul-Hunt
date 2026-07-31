@@ -3,9 +3,11 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..audit import audit_log
 from ..database import get_db
 from ..models import AuthorizedTarget, ValidationRun
 from ..schemas import AuthorizedTargetCreate, AuthorizedTargetOut, AuthorizedTargetUpdate
+from ..security import Actor, get_actor, require_roles
 
 router = APIRouter(prefix="/targets", tags=["targets"])
 
@@ -15,6 +17,7 @@ def list_targets(
     enabled: bool | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
+    _actor: Actor = Depends(get_actor),
 ) -> list[AuthorizedTarget]:
     statement = select(AuthorizedTarget)
     if enabled is not None:
@@ -23,7 +26,11 @@ def list_targets(
 
 
 @router.post("", response_model=AuthorizedTargetOut, status_code=status.HTTP_201_CREATED)
-def create_target(request: AuthorizedTargetCreate, db: Session = Depends(get_db)) -> AuthorizedTarget:
+def create_target(
+    request: AuthorizedTargetCreate,
+    db: Session = Depends(get_db),
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
+) -> AuthorizedTarget:
     target = AuthorizedTarget(**request.model_dump())
     db.add(target)
     try:
@@ -32,6 +39,8 @@ def create_target(request: AuthorizedTargetCreate, db: Session = Depends(get_db)
         db.rollback()
         raise HTTPException(status_code=409, detail="authorized target scope already exists") from exc
     db.refresh(target)
+    audit_log(db, "target.create", "target", target.id)
+    db.commit()
     return target
 
 
@@ -40,6 +49,7 @@ def update_target(
     target_id: str,
     request: AuthorizedTargetUpdate,
     db: Session = Depends(get_db),
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
 ) -> AuthorizedTarget:
     target = db.get(AuthorizedTarget, target_id)
     if not target:
@@ -52,11 +62,17 @@ def update_target(
         db.rollback()
         raise HTTPException(status_code=409, detail="authorized target scope already exists") from exc
     db.refresh(target)
+    audit_log(db, "target.update", "target", target.id, request.model_dump(exclude_unset=True))
+    db.commit()
     return target
 
 
 @router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_target(target_id: str, db: Session = Depends(get_db)) -> None:
+def delete_target(
+    target_id: str,
+    db: Session = Depends(get_db),
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
+) -> None:
     target = db.get(AuthorizedTarget, target_id)
     if not target:
         raise HTTPException(status_code=404, detail="authorized target not found")
@@ -66,4 +82,5 @@ def delete_target(target_id: str, db: Session = Depends(get_db)) -> None:
     if run_count:
         raise HTTPException(status_code=409, detail="target has validation audit history; disable it instead")
     db.delete(target)
+    audit_log(db, "target.delete", "target", target_id)
     db.commit()

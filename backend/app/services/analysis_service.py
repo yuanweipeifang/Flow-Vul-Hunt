@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -248,19 +248,26 @@ def run_analysis_job(job_id: str) -> None:
         job = db.get(AnalysisJob, job_id)
         if not job:
             return
+        now = datetime.now(timezone.utc)
         dataset = db.get(Dataset, job.dataset_id)
         if not dataset:
             job.status = "failed"
+            job.phase = "failed"
             job.error_message = "dataset not found"
+            job.last_error_at = now
+            job.error_count += 1
             db.commit()
             return
         if job.cancel_requested:
             job.status = "canceled"
-            job.completed_at = datetime.now(timezone.utc)
+            job.phase = "canceled"
+            job.completed_at = now
             db.commit()
             return
         job.status = "running"
-        job.started_at = datetime.now(timezone.utc)
+        job.phase = "loading_events"
+        job.started_at = now
+        job.last_heartbeat_at = now
         dataset.status = "analyzing"
         events = db.scalars(
             select(PayloadEvent).where(PayloadEvent.dataset_id == dataset.id).order_by(PayloadEvent.row_number)
@@ -274,13 +281,21 @@ def run_analysis_job(job_id: str) -> None:
             if job.cancel_requested:
                 canceled = True
                 break
+            heartbeat = datetime.now(timezone.utc)
+            job.phase = "analyzing_event"
+            job.current_event_id = event.id
+            job.last_heartbeat_at = heartbeat
             try:
                 analyze_event(db, event, job.use_llm, job.llm_scope, job.force)
                 job.succeeded += 1
             except Exception as exc:  # One malformed event must not abort the dataset.
                 db.rollback()
                 job = db.get(AnalysisJob, job_id)
+                now = datetime.now(timezone.utc)
                 job.failed += 1
+                job.error_count += 1
+                job.last_error_at = now
+                job.last_heartbeat_at = now
                 job.error_message = f"last event error: {type(exc).__name__}: {exc}"[:2000]
             job.processed += 1
             db.commit()
@@ -290,9 +305,12 @@ def run_analysis_job(job_id: str) -> None:
         if canceled:
             dataset.status = "analysis_canceled"
             job.status = "canceled"
+            job.phase = "canceled"
         else:
             dataset.status = "completed" if job.failed == 0 else "completed_with_errors"
             job.status = "completed" if job.failed == 0 else "completed_with_errors"
+            job.phase = "completed" if job.failed == 0 else "completed_with_errors"
+        job.current_event_id = None
         job.completed_at = datetime.now(timezone.utc)
         db.commit()
         rebuild_incidents(db, dataset.id)
@@ -301,8 +319,32 @@ def run_analysis_job(job_id: str) -> None:
         job = db.get(AnalysisJob, job_id)
         if job:
             job.status = "failed"
+            job.phase = "failed"
             job.error_message = f"{type(exc).__name__}: {exc}"[:2000]
+            job.last_error_at = datetime.now(timezone.utc)
+            job.error_count += 1
             job.completed_at = datetime.now(timezone.utc)
             db.commit()
     finally:
         db.close()
+
+
+def mark_stuck_jobs(db: Session, timeout_seconds: int) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+    jobs = db.scalars(
+        select(AnalysisJob).where(
+            AnalysisJob.status == "running",
+            AnalysisJob.last_heartbeat_at.is_not(None),
+            AnalysisJob.last_heartbeat_at < cutoff,
+        )
+    ).all()
+    for job in jobs:
+        job.status = "failed"
+        job.phase = "stuck_detected"
+        job.error_count += 1
+        job.last_error_at = datetime.now(timezone.utc)
+        job.error_message = "job heartbeat timed out"
+        job.completed_at = datetime.now(timezone.utc)
+    if jobs:
+        db.commit()
+    return len(jobs)

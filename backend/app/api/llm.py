@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from ..config import PROVIDER_NAMES, get_settings
 from ..llm.gateway import LLMGateway, LLMResponseError, LLMUnavailableError
 from ..llm.schemas import ConnectionTestResult
 from ..schemas import ProviderTestRequest, ProviderTestResult
+from ..security import Actor, get_actor, require_roles
 
 
 router = APIRouter(prefix="/llm", tags=["llm"])
 
 
 @router.get("/providers")
-def list_providers() -> dict:
+def list_providers(_actor: Actor = Depends(get_actor)) -> dict:
     settings = get_settings()
     return {
         "providers": [
@@ -29,7 +30,10 @@ def list_providers() -> dict:
 
 
 @router.post("/test", response_model=list[ProviderTestResult])
-def test_providers(request: ProviderTestRequest) -> list[ProviderTestResult]:
+def test_providers(
+    request: ProviderTestRequest,
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
+) -> list[ProviderTestResult]:
     settings = get_settings()
     names = request.providers or list(PROVIDER_NAMES)
     results: list[ProviderTestResult] = []

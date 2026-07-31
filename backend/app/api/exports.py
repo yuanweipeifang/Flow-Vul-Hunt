@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Dataset, Incident, PayloadEvent
 from ..services.export_service import stream_events_csv, stream_events_json, stream_incidents_json
+from ..security import Actor, get_actor
 
 router = APIRouter(prefix="/exports", tags=["exports"])
 
@@ -21,6 +22,7 @@ def export_events(
     format: str = Query(default="csv", pattern="^(csv|json)$"),
     min_risk: float | None = Query(default=None, ge=0, le=100),
     db: Session = Depends(get_db),
+    _actor: Actor = Depends(get_actor),
 ):
     _require_dataset(db, dataset_id)
     statement = select(PayloadEvent).where(PayloadEvent.dataset_id == dataset_id)
@@ -41,7 +43,11 @@ def export_events(
 
 
 @router.get("/incidents")
-def export_incidents(dataset_id: str, db: Session = Depends(get_db)):
+def export_incidents(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    _actor: Actor = Depends(get_actor),
+):
     _require_dataset(db, dataset_id)
     incidents = db.scalars(
         select(Incident).where(Incident.dataset_id == dataset_id).order_by(Incident.risk_score.desc())

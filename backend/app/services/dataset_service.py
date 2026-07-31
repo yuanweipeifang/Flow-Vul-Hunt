@@ -26,6 +26,7 @@ def ingest_dataset(db: Session, filename: str, name: str | None, content: bytes)
     parsed_count = 0
     failed_count = 0
     try:
+        batch_size = max(settings.ingest_batch_size, 1)
         for row_number, raw in enumerate(payloads, start=1):
             parsed = parse_payload(raw)
             event = PayloadEvent(
@@ -55,6 +56,8 @@ def ingest_dataset(db: Session, filename: str, name: str | None, content: bytes)
                 failed_count += 1
             else:
                 parsed_count += 1
+            if row_number % batch_size == 0:
+                db.flush()
         dataset.parsed_count = parsed_count
         dataset.failed_count = failed_count
         dataset.status = "ready"
@@ -64,4 +67,3 @@ def ingest_dataset(db: Session, filename: str, name: str | None, content: bytes)
     except Exception:
         db.rollback()
         raise
-

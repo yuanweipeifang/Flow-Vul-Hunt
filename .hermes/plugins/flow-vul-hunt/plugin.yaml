@@ -1,0 +1,4 @@
+name: flow-vul-hunt
+version: "1.0.0"
+description: Project-local Flow-Vul-Hunt security brain tools.
+entrypoint: flow_vul_hunt_plugin
