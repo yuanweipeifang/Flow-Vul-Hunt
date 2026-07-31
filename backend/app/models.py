@@ -24,6 +24,7 @@ class Dataset(Base):
     name: Mapped[str] = mapped_column(String(255))
     filename: Mapped[str] = mapped_column(String(255))
     file_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    storage_path: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="uploaded", index=True)
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     parsed_count: Mapped[int] = mapped_column(Integer, default=0)

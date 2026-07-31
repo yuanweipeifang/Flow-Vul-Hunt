@@ -5,6 +5,7 @@ export interface DatasetOut {
   name: string
   filename: string
   file_sha256: string
+  storage_path: string | null
   status: string
   row_count: number
   parsed_count: number
@@ -13,6 +14,18 @@ export interface DatasetOut {
   error_message: string | null
   created_at: string
   updated_at: string
+}
+
+export interface StoredCsvFileOut {
+  filename: string
+  storage_path: string
+  size_bytes: number
+  modified_at: string
+  dataset_id: string | null
+  dataset_name: string | null
+  status: string | null
+  row_count: number | null
+  file_sha256: string | null
 }
 
 export interface DatasetCompareResult {
@@ -362,7 +375,8 @@ export function queryString(params: Record<string, string | number | boolean | n
 export async function request<T>(path: string, config: ApiConfig, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (config.apiKey.trim()) headers.set('X-API-Key', config.apiKey.trim())
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData
+  if (init.body && !headers.has('Content-Type') && !isFormData) headers.set('Content-Type', 'application/json')
   const base = config.baseUrl.trim().replace(/\/$/, '')
   const response = await fetch(`${base}${path}`, { ...init, headers })
   if (!response.ok) {

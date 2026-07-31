@@ -16,7 +16,7 @@ from app.models import (
 )
 from app.services.analysis_service import analyze_event
 from app.services.comparison_service import compare_datasets
-from app.services.dataset_service import ingest_dataset
+from app.services.dataset_service import ingest_dataset, store_csv_upload
 from app.services.feature_extractor import extract_event_features
 from app.services.incident_service import rebuild_incidents
 from app.services.payload_inspector import inspect_payload
@@ -53,6 +53,27 @@ def test_real_sample_ingestion_and_analysis(tmp_path: Path) -> None:
         assert report.generator == "deterministic"
         assert report.content["evidence_event_ids"]
         assert "缺少时间" in report.content["limitations"][0]
+
+
+def test_csv_upload_is_stored_and_dataset_tracks_path(tmp_path: Path, monkeypatch) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'stored.db'}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr("app.services.dataset_service.get_settings", lambda: type("S", (), {
+        "max_payload_chars": 1000,
+        "ingest_batch_size": 1000,
+        "csv_storage_dir": str(tmp_path / "csv_uploads"),
+    })())
+    content = b'"GET /stored HTTP/1.1\\0D\\0AHost: app.test\\0D\\0A\\0D\\0A"\n'
+
+    stored_path = store_csv_upload("payloads.csv", content)
+
+    with session_factory() as db:
+        dataset = ingest_dataset(db, stored_path.name, None, content, storage_path=str(stored_path))
+        assert stored_path.exists()
+        assert stored_path.read_bytes() == content
+        assert dataset.filename == stored_path.name
+        assert dataset.storage_path == str(stored_path)
 
 
 def test_custom_rule_participates_in_analysis(tmp_path: Path) -> None:

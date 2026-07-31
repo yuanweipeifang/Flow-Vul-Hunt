@@ -4,7 +4,7 @@ export function PageHeader({ title, description, children }: PropsWithChildren<{
   return (
     <div className="page-header">
       <div>
-        <p className="eyebrow">Evidence-based Security Operations</p>
+        <p className="eyebrow">EVIDENCE-BASED SECURITY OPERATIONS</p>
         <h1>{title}</h1>
         <p>{description}</p>
       </div>
@@ -64,7 +64,7 @@ export function DataTable({ caption, headers, rows }: { caption: string; headers
   )
 }
 
-export function BarList({ data, accent = 'var(--blue)' }: { data: Record<string, number>; accent?: string }) {
+export function BarList({ data, accent = '#0428cb' }: { data: Record<string, number>; accent?: string }) {
   const entries = Object.entries(data || {})
   if (!entries.length) return <Empty />
   const max = Math.max(...entries.map(([, value]) => Number(value) || 0), 1)

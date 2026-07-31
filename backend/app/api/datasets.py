@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from pathlib import Path
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -9,10 +12,10 @@ from ..audit import audit_log
 from ..database import get_db
 from ..ingestion.csv_reader import DatasetFormatError
 from ..models import AnalysisJob, Dataset, DetectionFinding, PayloadEvent
-from ..schemas import AnalyzeRequest, BatchAnalyzeItem, BatchAnalyzeRequest, BatchAnalyzeResult, DatasetCompareResult, DatasetOut, JobOut
+from ..schemas import AnalyzeRequest, BatchAnalyzeItem, BatchAnalyzeRequest, BatchAnalyzeResult, DatasetCompareResult, DatasetOut, JobOut, StoredCsvFileOut
 from ..services.analysis_service import run_analysis_job
 from ..services.comparison_service import compare_datasets
-from ..services.dataset_service import ingest_dataset
+from ..services.dataset_service import csv_storage_root, ensure_dataset_storage_column, ingest_dataset, store_csv_upload
 from ..security import Actor, get_actor, require_roles
 
 
@@ -33,9 +36,10 @@ async def upload_dataset(
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="file exceeds MAX_UPLOAD_BYTES")
+    stored_path = store_csv_upload(filename, content)
     try:
-        dataset = ingest_dataset(db, filename, name, content)
-        audit_log(db, "dataset.upload", "dataset", dataset.id, {"filename": filename})
+        dataset = ingest_dataset(db, stored_path.name, name, content, storage_path=str(stored_path))
+        audit_log(db, "dataset.upload", "dataset", dataset.id, {"filename": filename, "storage_path": str(stored_path)})
         db.commit()
         db.refresh(dataset)
         return dataset
@@ -50,10 +54,43 @@ def list_datasets(
     db: Session = Depends(get_db),
     _actor: Actor = Depends(get_actor),
 ) -> list[Dataset]:
+    ensure_dataset_storage_column(db)
     statement = select(Dataset)
     if dataset_status:
         statement = statement.where(Dataset.status == dataset_status)
     return list(db.scalars(statement.order_by(Dataset.created_at.desc()).limit(limit)).all())
+
+
+@router.get("/files", response_model=list[StoredCsvFileOut])
+def list_stored_csv_files(
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    _actor: Actor = Depends(get_actor),
+) -> list[StoredCsvFileOut]:
+    ensure_dataset_storage_column(db)
+    root = csv_storage_root()
+    datasets = db.scalars(select(Dataset)).all()
+    by_path = {Path(dataset.storage_path).resolve(): dataset for dataset in datasets if dataset.storage_path}
+    by_filename = {dataset.filename: dataset for dataset in datasets}
+    files = sorted(root.glob("*.csv"), key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
+    result: list[StoredCsvFileOut] = []
+    for path in files:
+        stat = path.stat()
+        dataset = by_path.get(path.resolve()) or by_filename.get(path.name)
+        result.append(
+            StoredCsvFileOut(
+                filename=path.name,
+                storage_path=str(path),
+                size_bytes=stat.st_size,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc),
+                dataset_id=dataset.id if dataset else None,
+                dataset_name=dataset.name if dataset else None,
+                status=dataset.status if dataset else None,
+                row_count=dataset.row_count if dataset else None,
+                file_sha256=dataset.file_sha256 if dataset else None,
+            )
+        )
+    return result
 
 
 @router.get("/compare", response_model=DatasetCompareResult)

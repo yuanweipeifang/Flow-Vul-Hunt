@@ -1,22 +1,65 @@
 from __future__ import annotations
 
 import hashlib
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
 
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
-from ..config import get_settings
+from ..config import BASE_DIR, get_settings
 from ..ingestion.csv_reader import read_single_column_csv
 from ..ingestion.payload_parser import parse_payload
 from ..models import Dataset, PayloadEvent
 
 
-def ingest_dataset(db: Session, filename: str, name: str | None, content: bytes) -> Dataset:
+def csv_storage_root() -> Path:
+    settings = get_settings()
+    root = Path(settings.csv_storage_dir).expanduser()
+    if not root.is_absolute():
+        root = BASE_DIR / root
+    root.mkdir(parents=True, exist_ok=True)
+    return root.resolve()
+
+
+def safe_csv_filename(filename: str) -> str:
+    raw = Path(filename or "dataset.csv").name.strip() or "dataset.csv"
+    stem = Path(raw).stem.strip() or "dataset"
+    suffix = Path(raw).suffix.lower() or ".csv"
+    if suffix != ".csv":
+        suffix = ".csv"
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", stem).strip(" ._") or "dataset"
+    return f"{stem[:180]}{suffix}"
+
+
+def store_csv_upload(filename: str, content: bytes) -> Path:
+    root = csv_storage_root()
+    safe_name = safe_csv_filename(filename)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stored_name = f"{stamp}_{uuid4().hex[:8]}_{safe_name}"
+    path = root / stored_name
+    path.write_bytes(content)
+    return path
+
+
+def ensure_dataset_storage_column(db: Session) -> None:
+    columns = {column["name"] for column in inspect(db.bind).get_columns("datasets")}
+    if "storage_path" not in columns:
+        db.execute(text("ALTER TABLE datasets ADD COLUMN storage_path TEXT"))
+        db.commit()
+
+
+def ingest_dataset(db: Session, filename: str, name: str | None, content: bytes, storage_path: str | None = None) -> Dataset:
+    ensure_dataset_storage_column(db)
     settings = get_settings()
     payloads = read_single_column_csv(content, settings.max_payload_chars)
     dataset = Dataset(
         name=(name or filename).strip()[:255],
         filename=filename[:255],
         file_sha256=hashlib.sha256(content).hexdigest(),
+        storage_path=storage_path,
         status="parsing",
         row_count=len(payloads),
     )

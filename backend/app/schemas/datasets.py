@@ -13,6 +13,7 @@ class DatasetOut(ORMModel):
     name: str
     filename: str
     file_sha256: str
+    storage_path: str | None
     status: str
     row_count: int
     parsed_count: int
@@ -21,6 +22,18 @@ class DatasetOut(ORMModel):
     error_message: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class StoredCsvFileOut(BaseModel):
+    filename: str
+    storage_path: str
+    size_bytes: int
+    modified_at: datetime
+    dataset_id: str | None = None
+    dataset_name: str | None = None
+    status: str | None = None
+    row_count: int | None = None
+    file_sha256: str | None = None
 
 
 class AnalyzeRequest(BaseModel):

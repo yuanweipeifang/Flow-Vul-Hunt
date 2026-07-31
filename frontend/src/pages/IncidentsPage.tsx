@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import type { AppContextValue } from '../App'
 import { queryString, type IncidentOut } from '../api'
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader } from '../components'
@@ -24,7 +24,7 @@ export function IncidentsPage({ context }: { context: AppContextValue }) {
         <div className="cards-list">
           {incidents.map((incident) => (
             <Card key={incident.id}>
-              <div className="item-card" style={{ '--accent': incident.severity === 'critical' || incident.severity === 'high' ? 'var(--red)' : incident.severity === 'medium' ? 'var(--orange)' : 'var(--blue)' } as React.CSSProperties}>
+              <div className="item-card" style={{ '--accent': incident.severity === 'critical' || incident.severity === 'high' ? 'var(--color-red)' : incident.severity === 'medium' ? 'var(--color-orange)' : 'var(--color-primary)' } as React.CSSProperties}>
                 <div className="meta"><Badge text={incident.severity} tone={severityTone(incident.severity)} /><Badge text={incident.status} tone={statusTone(incident.status)} /><span>风险 {fmtScore(incident.risk_score)}</span><span>{fmtDate(incident.created_at)}</span></div>
                 <h3>{incident.title}</h3>
                 <p>{incident.summary}</p>

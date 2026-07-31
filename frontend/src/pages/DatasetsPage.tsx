@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import type { AppContextValue } from '../App'
-import { queryString, type DatasetCompareResult, type DatasetOut, type JobOut } from '../api'
+import { queryString, type DatasetCompareResult, type DatasetOut, type JobOut, type StoredCsvFileOut } from '../api'
 import { Badge, Card, DataTable, Empty, ErrorBox, Loading, PageHeader } from '../components'
 import { useApiData } from '../useApiData'
 import { fmtDate, fmtNumber, statusTone } from '../ui'
@@ -13,21 +13,29 @@ export function DatasetsPage({ context }: { context: AppContextValue }) {
   const [compareIds, setCompareIds] = useState({ baseline: '', candidate: '' })
   const [compareResult, setCompareResult] = useState<DatasetCompareResult | null>(null)
   const [compareError, setCompareError] = useState<unknown>(null)
+  const [reloadToken, setReloadToken] = useState(0)
 
-  const { data: datasetsData, error, loading } = useApiData(
+  const { data: datasetsData } = useApiData(
     () => context.api<DatasetOut[]>(`/api/datasets${queryString({ limit: 200 })}`),
-    [context],
+    [context, reloadToken],
   )
-  const datasets = datasetsData || []
+  const datasets = datasetsData || context.datasets || []
+
+  const { data: storedFilesData, error, loading } = useApiData(
+    () => context.api<StoredCsvFileOut[]>(`/api/datasets/files${queryString({ limit: 500 })}`),
+    [context, reloadToken],
+  )
+  const storedFiles = storedFilesData || []
 
   async function upload(file: File) {
     setUploading(true)
     setUploadError(null)
     try {
       const form = new FormData()
-      form.append('file', file)
+      form.append('file', file, file.name)
       await context.api<DatasetOut>('/api/datasets/upload', { method: 'POST', body: form })
       await context.refreshGlobal()
+      setReloadToken((value) => value + 1)
       if (fileInput.current) fileInput.current.value = ''
     } catch (reason) {
       setUploadError(reason)
@@ -44,6 +52,7 @@ export function DatasetsPage({ context }: { context: AppContextValue }) {
         body: JSON.stringify({ use_llm: true, llm_scope: 'suspicious', force: false }),
       })
       await context.refreshGlobal()
+      setReloadToken((value) => value + 1)
     } finally {
       setAnalyzingId(null)
     }
@@ -63,50 +72,61 @@ export function DatasetsPage({ context }: { context: AppContextValue }) {
     }
   }
 
-  const rows = datasets.map((dataset) => [
-    <code>{dataset.id.slice(0, 8)}</code>,
-    dataset.name,
-    <Badge text={dataset.status} tone={statusTone(dataset.status)} />,
-    fmtNumber(dataset.row_count),
-    `${fmtNumber(dataset.parsed_count)} / ${fmtNumber(dataset.failed_count)}`,
-    fmtNumber(dataset.analyzed_count),
-    <span className="nowrap">{fmtDate(dataset.created_at)}</span>,
-    <button className="ghost-btn" type="button" disabled={analyzingId === dataset.id} onClick={() => void analyze(dataset.id)}>
-      {analyzingId === dataset.id ? '分析中…' : '启动分析'}
-    </button>,
+  const fileRows = storedFiles.map((file) => [
+    <code>{file.filename}</code>,
+    file.dataset_id ? <Badge text={file.status || 'unknown'} tone={statusTone(file.status || 'unknown')} /> : <Badge text="stored only" tone="gray" />,
+    fmtNumber(file.size_bytes),
+    file.row_count === null ? '-' : fmtNumber(file.row_count),
+    <span className="nowrap">{fmtDate(file.modified_at)}</span>,
+    file.dataset_id ? (
+      <button className="ghost-btn" type="button" disabled={analyzingId === file.dataset_id} onClick={() => void analyze(file.dataset_id as string)}>
+        {analyzingId === file.dataset_id ? '分析中...' : '启动分析'}
+      </button>
+    ) : (
+      <span className="muted">仅文件</span>
+    ),
   ])
 
   return (
     <>
-      <PageHeader title="数据集管理" description="上传、分析、对比和删除 CSV Payload 数据集；所有操作直接调用后端真实接口。">
-        <input ref={fileInput} type="file" accept=".csv" style={{ display: 'none' }} onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file) }} />
+      <PageHeader title="数据集管理" description="上传 CSV 后会保存到后端存储目录；列表直接读取存储目录中的 CSV 文件。">
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".csv,text/csv"
+          style={{ display: 'none' }}
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) void upload(file)
+          }}
+        />
         <button className="primary-btn" type="button" disabled={uploading} onClick={() => fileInput.current?.click()}>
-          {uploading ? '上传中…' : '上传 CSV'}
+          {uploading ? '上传中...' : '上传 CSV'}
         </button>
       </PageHeader>
 
       {uploadError ? <div className="section"><ErrorBox error={uploadError} /></div> : null}
 
-      <Card title="数据集列表" description={`共 ${fmtNumber(datasets.length)} 个数据集。`}>
-        {loading ? <Loading /> : error ? <ErrorBox error={error} /> : rows.length ? (
-          <DataTable caption="数据集列表" headers={['ID','名称','状态','行数','解析/失败','已分析','上传时间','操作']} rows={rows} />
-        ) : <Empty text="后端返回空数据集列表" />}
+      <Card title="数据集列表" description={`存储目录中共有 ${fmtNumber(storedFiles.length)} 个 CSV 文件。`}>
+        {loading ? <Loading /> : error ? <ErrorBox error={error} /> : fileRows.length ? (
+          <DataTable caption="数据集列表" headers={['文件名', '状态', '大小(B)', '行数', '存储时间', '操作']} rows={fileRows} />
+        ) : <Empty text="存储目录中还没有 CSV 文件" />}
       </Card>
 
-      <Card title="数据集对比" description="对比两个数据集的差异，返回新增 Host、Path、攻击类型和重复 Payload 哈希。">
+      <Card title="数据集对比" description="对比两个已成功入库的数据集，返回新增 Host、Path、攻击类型和重复 Payload 哈希。">
         <div className="filters">
           <label className="field">
             <span>基准数据集</span>
             <select value={compareIds.baseline} onChange={(event) => setCompareIds((current) => ({ ...current, baseline: event.target.value }))}>
               <option value="">选择基准</option>
-              {datasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}
+              {datasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.filename}</option>)}
             </select>
           </label>
           <label className="field">
             <span>候选数据集</span>
             <select value={compareIds.candidate} onChange={(event) => setCompareIds((current) => ({ ...current, candidate: event.target.value }))}>
               <option value="">选择候选</option>
-              {datasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}
+              {datasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.filename}</option>)}
             </select>
           </label>
           <button className="primary-btn" type="button" onClick={() => void compare()}>执行对比</button>

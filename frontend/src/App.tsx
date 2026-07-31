@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { NavLink, Route, Routes, useNavigate } from 'react-router-dom'
+import { NavLink, Route, Routes, Navigate } from 'react-router-dom'
 import './App.css'
 import {
   defaultApiConfig,
@@ -10,6 +10,7 @@ import {
   type HealthOut,
   type SystemMetricsOut,
 } from './api'
+import { HomePage } from './pages/HomePage'
 import { ConsolePage } from './pages/ConsolePage'
 import { DatasetsPage } from './pages/DatasetsPage'
 import { EventsPage } from './pages/EventsPage'
@@ -32,18 +33,6 @@ export interface AppContextValue {
   api: <T>(path: string, init?: RequestInit) => Promise<T>
 }
 
-const navItems = [
-  ['/', '系统控制台'],
-  ['/datasets', '数据集管理'],
-  ['/events', 'Payload 事件'],
-  ['/incidents', 'Incident 聚类'],
-  ['/vulnerabilities', '漏洞候选'],
-  ['/hunt', '狩猎工作台'],
-  ['/jobs', '分析任务'],
-  ['/agent', 'Agent 会话'],
-  ['/audit', '审计日志'],
-]
-
 function App() {
   const [apiConfig, setApiConfig] = useState<ApiConfig>(() => ({
     baseUrl: window.location.origin.startsWith('http') ? window.location.origin : defaultApiConfig.baseUrl,
@@ -56,7 +45,6 @@ function App() {
   const [metrics, setMetrics] = useState<SystemMetricsOut | null>(null)
   const [status, setStatus] = useState('等待连接后端')
   const [tone, setTone] = useState<'ok' | 'warn' | 'bad'>('warn')
-  const navigate = useNavigate()
 
   const api = useCallback(
     <T,>(path: string, init: RequestInit = {}) => request<T>(path, apiConfig, init),
@@ -105,14 +93,32 @@ function App() {
     [api, apiConfig, datasets, health, healthError, metrics, refreshGlobal, selectedDataset],
   )
 
+  const navItemsWithIcons: Array<[string, string, string]> = [
+    ['/home', '主页', '🏠'],
+    ['/', '系统控制台', '📊'],
+    ['/datasets', '数据集管理', '📁'],
+    ['/events', 'Payload 事件', '⚡'],
+    ['/incidents', 'Incident 聚类', '🔗'],
+    ['/vulnerabilities', '漏洞候选', '🛡️'],
+    ['/hunt', '狩猎工作台', '🔍'],
+    ['/jobs', '分析任务', '📋'],
+    ['/agent', 'Agent 会话', '🤖'],
+    ['/audit', '审计日志', '📝'],
+  ]
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">FV</span><span>Flow Vul Hunt</span></div>
+        <div className="brand">
+          <span className="brand-mark">FV</span>
+          <span>Flow Vul Hunt</span>
+        </div>
+        <div className="sidebar-divider" />
         <nav className="nav" aria-label="主导航">
-          {navItems.map(([to, label]) => (
+          {navItemsWithIcons.map(([to, label, icon]) => (
             <NavLink key={to} to={to} className={({ isActive }) => (isActive ? 'active' : undefined)} end={to === '/'}>
-              {label}
+              <span className="nav-icon" aria-hidden="true">{icon}</span>
+              <span className="nav-label">{label}</span>
             </NavLink>
           ))}
         </nav>
@@ -132,6 +138,7 @@ function App() {
       <main className="content">
         <Routes>
           <Route path="/" element={<ConsolePage context={context} />} />
+          <Route path="/home" element={<HomePage context={context} />} />
           <Route path="/datasets" element={<DatasetsPage context={context} />} />
           <Route path="/events" element={<EventsPage context={context} />} />
           <Route path="/incidents" element={<IncidentsPage context={context} />} />
@@ -140,7 +147,7 @@ function App() {
           <Route path="/jobs" element={<JobsPage context={context} />} />
           <Route path="/agent" element={<AgentPage context={context} />} />
           <Route path="/audit" element={<AuditPage context={context} />} />
-          <Route path="*" element={<button className="primary-btn" type="button" onClick={() => navigate('/')}>返回控制台</button>} />
+          <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </main>
     </div>

@@ -112,6 +112,7 @@ class Settings:
     llm_max_input_chars: int
     providers: dict[str, ProviderSettings]
     agent_routes: dict[str, tuple[str, ...]]
+    csv_storage_dir: str = "data/csv_uploads"
     ingest_batch_size: int = 1000
     auth_enabled: bool = False
     api_keys: dict[str, str] | None = None
@@ -197,6 +198,7 @@ def get_settings() -> Settings:
         app_env=os.getenv("APP_ENV", "development"),
         database_url=os.getenv("DATABASE_URL", default_db),
         max_upload_bytes=_int_env("MAX_UPLOAD_BYTES", 50 * 1024 * 1024),
+        csv_storage_dir=os.getenv("CSV_STORAGE_DIR", str(BASE_DIR / "data" / "csv_uploads")),
         max_payload_chars=_int_env("MAX_PAYLOAD_CHARS", 100_000),
         ingest_batch_size=_int_env("INGEST_BATCH_SIZE", 1000),
         llm_timeout_seconds=_int_env("LLM_TIMEOUT_SECONDS", 60),

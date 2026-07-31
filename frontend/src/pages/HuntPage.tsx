@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import type { AppContextValue } from '../App'
 import { type HuntResult } from '../api'
 import { Badge, Card, DataTable, Empty, ErrorBox, JsonBlock, Loading, PageHeader } from '../components'
@@ -47,7 +47,7 @@ export function HuntPage({ context }: { context: AppContextValue }) {
       <Card title="狩猎结果">
         {loading ? <Loading text="正在执行真实狩猎查询…" /> : error ? <ErrorBox error={error} /> : !result ? <Empty text="尚未执行狩猎查询" /> : (
           <>
-            <div className="item-card" style={{ '--accent': 'var(--green)' } as React.CSSProperties}>
+            <div className="item-card" style={{ '--accent': 'var(--color-green)' } as React.CSSProperties}>
               <div className="meta"><Badge text={result.llm_used ? 'LLM 解释' : '确定性解释'} tone={result.llm_used ? 'purple' : 'blue'} /><span>命中 {fmtNumber(result.matched_events)}</span><span>排除 benign {fmtNumber(result.suppressed_events)}</span></div>
               <p>{result.summary || '后端未返回摘要'}</p>
               {result.warning ? <ErrorBox error={result.warning} /> : null}
