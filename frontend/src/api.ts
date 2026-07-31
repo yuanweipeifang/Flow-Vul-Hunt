@@ -290,6 +290,17 @@ export interface AgentStatusOut {
   require_verifier: boolean
 }
 
+export interface AgentTaskSpecOut {
+  task_id: string
+  agent_name: string
+  goal: string
+  tool_names: string[]
+  depends_on: string[]
+  priority: number
+  requires_confirmation: boolean
+  status: string
+}
+
 export interface AgentSessionOut {
   id: string
   actor: string
@@ -305,6 +316,7 @@ export interface AgentSessionOut {
   requires_confirmation: boolean
   created_at: string
   updated_at: string
+  task_graph: AgentTaskSpecOut[]
   tool_calls: AgentToolCallOut[]
   runs: AgentRunOut[]
 }
@@ -334,6 +346,7 @@ export interface AgentRunOut {
   error: string | null
   started_at: string | null
   completed_at: string | null
+  task_graph: AgentTaskSpecOut[]
   messages: AgentMessageOut[]
 }
 
@@ -342,6 +355,10 @@ export interface AgentMessageOut {
   agent_name: string
   role: string
   task: string
+  message_type: string
+  recipient: string | null
+  follow_up_action: JsonObject
+  resolved: boolean
   input_summary: JsonObject
   output: JsonObject
   depends_on: string[]
@@ -351,6 +368,18 @@ export interface AgentMessageOut {
   status: string
   error: string | null
   created_at: string | null
+}
+
+export interface AgentMemoryOut {
+  id: string
+  dataset_id: string | null
+  agent_name: string
+  memory_type: string
+  summary: string
+  content: JsonObject
+  confidence: number
+  created_at: string
+  updated_at: string
 }
 
 export interface ApiConfig {

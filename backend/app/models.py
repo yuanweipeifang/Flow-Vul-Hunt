@@ -5,7 +5,6 @@ from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-<<<<<<< Updated upstream
 
 from .database import Base
 
@@ -72,73 +71,6 @@ class PayloadEvent(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     dataset: Mapped[Dataset] = relationship(back_populates="events")
-=======
-
-from .database import Base
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def new_id() -> str:
-    return str(uuid4())
-
-
-class Dataset(Base):
-    __tablename__ = "datasets"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    name: Mapped[str] = mapped_column(String(255))
-    filename: Mapped[str] = mapped_column(String(255))
-    file_sha256: Mapped[str] = mapped_column(String(64), index=True)
-    status: Mapped[str] = mapped_column(String(32), default="uploaded", index=True)
-    row_count: Mapped[int] = mapped_column(Integer, default=0)
-    parsed_count: Mapped[int] = mapped_column(Integer, default=0)
-    failed_count: Mapped[int] = mapped_column(Integer, default=0)
-    analyzed_count: Mapped[int] = mapped_column(Integer, default=0)
-    error_message: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-
-    events: Mapped[list[PayloadEvent]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
-
-
-class PayloadEvent(Base):
-    __tablename__ = "payload_events"
-    __table_args__ = (
-        UniqueConstraint("dataset_id", "row_number", name="uq_dataset_row"),
-        Index("ix_event_dataset_risk", "dataset_id", "risk_score"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
-    row_number: Mapped[int] = mapped_column(Integer)
-    raw_payload: Mapped[str] = mapped_column(Text)
-    decoded_payload: Mapped[str] = mapped_column(Text)
-    payload_hash: Mapped[str] = mapped_column(String(64), index=True)
-    protocol: Mapped[str] = mapped_column(String(32), default="unknown", index=True)
-    http_method: Mapped[str | None] = mapped_column(String(16), index=True)
-    host: Mapped[str | None] = mapped_column(String(512), index=True)
-    path: Mapped[str | None] = mapped_column(Text)
-    query: Mapped[str | None] = mapped_column(Text)
-    headers: Mapped[dict] = mapped_column(JSON, default=dict)
-    body: Mapped[str | None] = mapped_column(Text)
-    content_type: Mapped[str | None] = mapped_column(String(255))
-    payload_length: Mapped[int] = mapped_column(Integer, default=0)
-    entropy: Mapped[float] = mapped_column(Float, default=0.0)
-    printable_ratio: Mapped[float] = mapped_column(Float, default=0.0)
-    encoded_segment_count: Mapped[int] = mapped_column(Integer, default=0)
-    is_binary: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    parse_status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
-    parse_error: Mapped[str | None] = mapped_column(Text)
-    verdict: Mapped[str] = mapped_column(String(32), default="unreviewed", index=True)
-    risk_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-
-    dataset: Mapped[Dataset] = relationship(back_populates="events")
->>>>>>> Stashed changes
     findings: Mapped[list[DetectionFinding]] = relationship(back_populates="event", cascade="all, delete-orphan")
     llm_analyses: Mapped[list[LLMAnalysis]] = relationship(back_populates="event", cascade="all, delete-orphan")
     annotations: Mapped[list[Annotation]] = relationship(back_populates="event", cascade="all, delete-orphan")

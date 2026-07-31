@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
 from ...config import Settings
@@ -58,7 +59,7 @@ class AgentRole:
         )
 
     def payload(self, context: dict[str, Any]) -> dict[str, Any]:
-        return context
+        return jsonable_encoder(context, exclude_none=True, sqlalchemy_safe=True)
 
     def fallback(self, context: dict[str, Any]) -> RoleExecution:
         raise NotImplementedError
