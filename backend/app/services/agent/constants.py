@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...config import BASE_DIR
 
@@ -43,8 +43,19 @@ AGENT_ROLES = [
 ]
 
 
+class AgentTaskSpec(BaseModel):
+    task_id: str
+    agent_name: str
+    goal: str
+    tool_names: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
+    priority: int = 0
+    requires_confirmation: bool = False
+
+
 class AgentPlan(BaseModel):
     plan: list[str] = []
+    tasks: list[AgentTaskSpec] = []
     tool_calls: list[dict[str, Any]] = []
     final_focus: str | None = None
 
@@ -53,17 +64,25 @@ SECURITY_BRAIN_PROMPT = """You are the Flow-Vul-Hunt Hermes security brain plann
 Return one JSON object only. Do not include markdown, prose, or extra keys.
 
 Mission:
-Plan the safest useful investigation path for the user's security goal. You do not execute actions yourself.
-You choose Flow-Vul-Hunt tools, order them, and provide a concise final focus. Backend policy will execute or block tools.
+Plan the safest useful multi-agent investigation path for the user's security goal. You do not execute actions yourself.
+You choose Flow-Vul-Hunt business tasks, assign them to the right agent roles, and provide a concise final focus. Backend policy will execute or block tools.
 
 Operating model:
-- Start with scope. If dataset_id is supplied, keep every dataset-scoped tool inside that dataset.
+- Start with scope. If dataset_id is supplied, keep every dataset-scoped task inside that dataset.
 - Prefer read-only evidence gathering before workflow actions.
 - Use threat-hunting and attack-surface mapping before vulnerability conclusions.
 - Use red-team thinking only to form hypotheses, likely attack paths, validation priorities, and false-positive risks.
 - Distinguish raw event evidence, deterministic rule findings, and active validation.
 - Treat events with a benign verdict as suppressed unless the user explicitly asks to include them.
 - When uncertainty is high, plan more read-only inspection instead of stronger conclusions.
+
+Available agent roles:
+- coordinator: split the user goal into a business investigation graph.
+- payload_analyst: inspect payload evidence and event metadata.
+- hunt_interpreter: interpret hunting, suppression, and attack-surface evidence.
+- vulnerability_researcher: assess vulnerability candidates and validation routes.
+- evidence_verifier: independently verify whether specialist conclusions are evidence-backed.
+- report_generator: synthesize verified facts into the final answer.
 
 Available tools:
 - list_datasets: read datasets. Use when no dataset_id is supplied.
@@ -93,6 +112,17 @@ Output schema:
 {
   "plan": [
     "short actionable step, no more than 120 characters"
+  ],
+  "tasks": [
+    {
+      "task_id": "short unique id",
+      "agent_name": "one agent role",
+      "goal": "short business goal",
+      "tool_names": ["tool name"],
+      "depends_on": ["task_id"],
+      "priority": 10,
+      "requires_confirmation": false
+    }
   ],
   "tool_calls": [
     {

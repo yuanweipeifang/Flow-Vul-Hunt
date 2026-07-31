@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from ...config import Settings
-from ...models import AgentMessage, AgentRun, AgentSession, AgentToolCall, utcnow
+from ...models import AgentMemory, AgentMessage, AgentRun, AgentSession, AgentToolCall, utcnow
 from ...schemas import AgentChatRequest, AgentChatResult
 from ...security import Actor
 from .collaboration import CollaborationMessage
@@ -20,6 +20,7 @@ def store_agent_session(
     settings: Settings,
     agents: list[CollaborationMessage] | None = None,
 ) -> None:
+    task_graph = [task.model_dump(mode="json") for task in result.task_graph]
     session = AgentSession(
         id=session_id,
         actor=actor.name,
@@ -30,6 +31,7 @@ def store_agent_session(
         planner_used=result.planner_used,
         status="waiting_confirmation" if result.requires_confirmation else "completed",
         plan=result.plan,
+        task_graph=task_graph,
         answer=result.answer,
         warning=result.warning,
         requires_confirmation=result.requires_confirmation,
@@ -61,6 +63,7 @@ def store_agent_session(
             llm_used=result.llm_used,
             consensus=result.consensus,
             evidence_gaps=result.evidence_gaps,
+            task_graph=task_graph,
             started_at=utcnow(),
             completed_at=utcnow(),
         )
@@ -73,6 +76,10 @@ def store_agent_session(
                     agent_name=message.agent_name,
                     role=message.role,
                     task=message.task,
+                    message_type=message.message_type,
+                    recipient=message.recipient,
+                    follow_up_action=message.follow_up_action,
+                    resolved=message.resolved,
                     input_summary=message.input_summary,
                     output=message.output,
                     depends_on=message.depends_on,

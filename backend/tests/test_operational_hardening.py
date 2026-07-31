@@ -318,6 +318,8 @@ def test_agent_executes_read_only_tools_and_blocks_high_risk_without_confirmatio
     names = {agent.agent_name for agent in result.agents}
     assert {"coordinator", "payload_analyst", "hunt_interpreter", "vulnerability_researcher", "evidence_verifier", "report_generator"} <= names
     assert result.consensus["confirmed_facts"]
+    assert result.task_graph
+    assert any(task.agent_name == "evidence_verifier" for task in result.task_graph)
     assert result.evidence_gaps
     blocked = [call for call in result.tool_calls if call.name == "start_dataset_analysis"]
     assert blocked and blocked[0].status == "blocked"
@@ -325,6 +327,7 @@ def test_agent_executes_read_only_tools_and_blocks_high_risk_without_confirmatio
     assert db_session.query(AuditLog).filter_by(action="agent.chat").count() == 1
     stored = db_session.get(AgentSession, result.session_id)
     assert stored.status == "waiting_confirmation"
+    assert stored.task_graph
     assert len(stored.tool_calls) == len(result.tool_calls)
     assert db_session.query(AgentRun).filter_by(session_id=result.session_id).count() == 1
     assert db_session.query(AgentMessage).filter_by(session_id=result.session_id).count() >= 6

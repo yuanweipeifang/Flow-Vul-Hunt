@@ -7,10 +7,10 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
-from ..models import AgentRun, AgentSession
-from ..schemas import AgentChatRequest, AgentChatResult, AgentConfirmRequest, AgentSessionOut, AgentStatusOut, AgentTraceOut
+from ..models import AgentMemory, AgentRun, AgentSession
+from ..schemas import AgentChatRequest, AgentChatResult, AgentConfirmRequest, AgentMemoryOut, AgentSessionOut, AgentStatusOut, AgentTraceOut
 from ..security import Actor, get_actor, require_roles
-from ..services.agent import agent_status, confirm_agent_tools, hermes_smoke_check, run_agent_chat, run_out, tool_call_out
+from ..services.agent import agent_status, confirm_agent_tools, hermes_smoke_check, memory_out, run_agent_chat, run_out, task_graph_out, tool_call_out
 
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -24,6 +24,23 @@ def get_agent_status(_actor: Actor = Depends(get_actor)) -> AgentStatusOut:
 @router.get("/hermes/smoke")
 def get_hermes_smoke(_actor: Actor = Depends(get_actor)) -> dict:
     return hermes_smoke_check()
+
+
+@router.get("/memory", response_model=list[AgentMemoryOut])
+def list_agent_memory(
+    dataset_id: str | None = None,
+    agent_name: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    _actor: Actor = Depends(get_actor),
+) -> list[AgentMemoryOut]:
+    statement = select(AgentMemory)
+    if dataset_id:
+        statement = statement.where(AgentMemory.dataset_id == dataset_id)
+    if agent_name:
+        statement = statement.where(AgentMemory.agent_name == agent_name)
+    rows = db.scalars(statement.order_by(AgentMemory.created_at.desc()).limit(min(max(limit, 1), 200))).all()
+    return [memory_out(row) for row in rows]
 
 
 @router.post("/chat", response_model=AgentChatResult)
@@ -114,6 +131,7 @@ def _session_out(session: AgentSession) -> AgentSessionOut:
         requires_confirmation=session.requires_confirmation,
         created_at=session.created_at,
         updated_at=session.updated_at,
+        task_graph=task_graph_out(list(session.task_graph or [])),
         tool_calls=[tool_call_out(call) for call in session.tool_calls],
         runs=[run_out(run) for run in session.runs],
     )

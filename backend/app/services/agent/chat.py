@@ -15,17 +15,11 @@ from ...schemas import AgentChatRequest, AgentChatResult, AgentToolCallOut
 from ...security import Actor
 from .collaboration import CollaborationMessage, build_collaboration
 from .isolation import agent_status
-from .mappers import message_out, tool_call_out
-from .planner import hermes_planned_tools, planned_tools_fallback
+from .mappers import message_out, task_graph_out, tool_call_out
+from .orchestrator import AgentOrchestrator
+from .planner import hermes_planned_tools, planned_task_graph_fallback
 from .sessions import store_agent_session
-from .tools import _risk_level, execute_tool
-
-_LOCAL_PLAN = [
-    "确认数据集范围和当前状态",
-    "执行威胁狩猎并默认排除已确认误报",
-    "汇总漏洞候选并给出研判重点",
-    "高风险动作在确认后再执行",
-]
+from .tools import execute_tool
 
 
 def run_agent_chat(
@@ -42,81 +36,42 @@ def run_agent_chat(
 
     allowed = set(settings.agent_allowed_tools)
     session_id = str(uuid4())
-    max_steps = request.max_steps or settings.agent_max_steps
     warning = None
     planner_used = "local"
     final_focus = None
     if status.hermes_available and settings.llm_enabled:
         try:
-            plan, planned, final_focus = hermes_planned_tools(request, settings, allowed)
-            planned = planned[:max_steps]
+            plan, planned, tasks, final_focus = hermes_planned_tools(request, settings, allowed)
             planner_used = "hermes"
         except (LLMUnavailableError, LLMResponseError, RuntimeError) as exc:
-            planned = planned_tools_fallback(request)[:max_steps]
-            plan = _LOCAL_PLAN
+            plan, planned, tasks, final_focus = planned_task_graph_fallback(request)
             warning = f"Hermes planner unavailable; local planner used: {exc}"
     else:
-        planned = planned_tools_fallback(request)[:max_steps]
-        plan = _LOCAL_PLAN
+        plan, planned, tasks, final_focus = planned_task_graph_fallback(request)
         if not status.hermes_available:
             warning = "Hermes 包尚未安装，当前使用本项目内置 planner；接口和隔离目录已就绪。"
-    tool_calls: list[AgentToolCallOut] = []
-    requires_confirmation = False
 
-    for index, planned_call in enumerate(planned, start=1):
-        name = planned_call["name"]
-        call_id = f"tool-{index}"
-        risk_level = _risk_level(name)
-        call = AgentToolCallOut(
-            id=call_id,
-            name=name,
-            risk_level=risk_level,
-            arguments=planned_call["arguments"],
-            status="planned",
-            requires_confirmation=risk_level == "high_risk",
-        )
-        if name not in allowed:
-            call.status = "blocked"
-            call.error = "tool is not allowed by AGENT_ALLOWED_TOOLS"
-        elif call.requires_confirmation and (
-            settings.agent_require_confirmation
-            and (not request.auto_execute or call_id not in request.confirmed_tool_call_ids)
-        ):
-            call.status = "blocked"
-            call.error = "confirmation required before executing this high-risk tool"
-            requires_confirmation = True
-        elif request.auto_execute or risk_level == "read_only":
-            try:
-                call.result = execute_tool(db, background_tasks, name, planned_call["arguments"])
-                call.status = "executed"
-            except HTTPException as exc:
-                call.status = "failed"
-                call.error = str(exc.detail)
-            except Exception as exc:
-                call.status = "failed"
-                call.error = f"{type(exc).__name__}: {exc}"[:500]
-        tool_calls.append(call)
-
-    executed = [call for call in tool_calls if call.status == "executed"]
-    blocked = [call for call in tool_calls if call.status == "blocked"]
-    answer = f"已生成 {len(planned)} 步安全分析计划，执行 {len(executed)} 个工具。"
-    if blocked:
-        answer += f" 有 {len(blocked)} 个工具被策略拦截或等待确认。"
-    if final_focus:
-        answer += f" 重点：{final_focus}"
+    orchestrator = AgentOrchestrator(settings)
+    tool_calls, role_executions, consensus, evidence_gaps, collaboration_answer = orchestrator.execute(
+        request=request,
+        tasks=tasks,
+        planned=planned,
+        db=db,
+        background_tasks=background_tasks,
+        allowed=allowed,
+    )
+    requires_confirmation = any(call.status == "blocked" and call.requires_confirmation for call in tool_calls)
+    collaboration_mode = "multi_agent" if settings.agent_collaboration_enabled else "single_planner"
     agents: list[CollaborationMessage] = []
-    consensus: dict[str, Any] = {}
-    evidence_gaps: list[str] = []
-    collaboration_mode = "single_planner"
-    llm_used = planner_used == "hermes"
+    answer = collaboration_answer
     if settings.agent_collaboration_enabled:
-        collaboration_mode = "multi_agent"
         agents, consensus, evidence_gaps, collaboration_answer = build_collaboration(
-            request, planned, tool_calls, settings
+            request, planned, tool_calls, settings, role_executions
         )
-        answer = f"{collaboration_answer} 工具执行概况：计划 {len(planned)} 步，已执行 {len(executed)} 个。"
-        if blocked:
-            answer += f" {len(blocked)} 个高风险或受限工具仍需确认。"
+        answer = f"{collaboration_answer} 工具执行概况：计划 {len(planned)} 步，已执行 {len([call for call in tool_calls if call.status == 'executed'])} 个。"
+        if requires_confirmation:
+            answer += " 高风险工具仍需确认。"
+    llm_used = planner_used == "hermes" or any(execution.llm_used for execution in role_executions)
     result = AgentChatResult(
         session_id=session_id,
         runtime=status.runtime,
@@ -128,6 +83,7 @@ def run_agent_chat(
         warning=warning,
         planner_used=planner_used,
         collaboration_mode=collaboration_mode,
+        task_graph=task_graph_out(tasks),
         agents=[message_out(message) for message in agents],
         consensus=consensus,
         evidence_gaps=evidence_gaps,
