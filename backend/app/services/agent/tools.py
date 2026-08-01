@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import BackgroundTasks, HTTPException
@@ -15,6 +16,7 @@ from ...models import (
     VulnerabilityCandidate,
 )
 from ...services.analysis_service import run_analysis_job
+from ...services.dataset_service import csv_storage_root
 from ...services.hunt_service import deterministic_filters, execute_hunt
 from .constants import HIGH_RISK_TOOLS, RED_TEAM_ATTACK_TYPES, WRITE_REVIEW_TOOLS
 
@@ -149,6 +151,63 @@ def _risk_level(tool_name: str) -> str:
     return "read_only"
 
 
+def _dataset_csv_path(dataset: Dataset) -> Path | None:
+    root = csv_storage_root()
+    candidates: list[Path] = []
+    if dataset.storage_path:
+        candidates.append(Path(dataset.storage_path))
+    candidates.append(root / dataset.filename)
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except OSError:
+            continue
+        if resolved.is_file() and resolved.suffix.lower() == ".csv":
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                continue
+            return resolved
+    return None
+
+
+def _read_dataset_csv_sample(db: Session, dataset_id: str, limit: int) -> dict[str, Any]:
+    dataset = db.get(Dataset, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="dataset not found")
+    path = _dataset_csv_path(dataset)
+    rows: list[str] = []
+    if path:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            for line in handle:
+                text = line.rstrip("\r\n")
+                if text:
+                    rows.append(text[:2000])
+                if len(rows) >= limit:
+                    break
+    if not rows:
+        events = db.scalars(
+            select(PayloadEvent)
+            .where(PayloadEvent.dataset_id == dataset_id)
+            .order_by(PayloadEvent.row_number)
+            .limit(limit)
+        ).all()
+        rows = [event.raw_payload[:2000] for event in events]
+    return {
+        "dataset": {
+            "id": dataset.id,
+            "name": dataset.name,
+            "filename": dataset.filename,
+            "status": dataset.status,
+            "row_count": dataset.row_count,
+            "file_sha256": dataset.file_sha256,
+        },
+        "storage_path": str(path) if path else None,
+        "sample_count": len(rows),
+        "sample_rows": rows,
+    }
+
+
 def execute_tool(
     db: Session,
     background_tasks: BackgroundTasks,
@@ -157,12 +216,41 @@ def execute_tool(
 ) -> Any:
     if name == "list_datasets":
         rows = db.scalars(select(Dataset).order_by(Dataset.created_at.desc()).limit(arguments.get("limit", 20))).all()
-        return [{"id": item.id, "name": item.name, "status": item.status, "row_count": item.row_count} for item in rows]
+        return [
+            {
+                "id": item.id,
+                "name": item.name,
+                "filename": item.filename,
+                "status": item.status,
+                "row_count": item.row_count,
+            }
+            for item in rows
+        ]
     if name == "get_dataset":
         dataset = db.get(Dataset, arguments["dataset_id"])
         if not dataset:
             raise HTTPException(status_code=404, detail="dataset not found")
-        return {"id": dataset.id, "name": dataset.name, "status": dataset.status, "row_count": dataset.row_count}
+        return {
+            "id": dataset.id,
+            "name": dataset.name,
+            "filename": dataset.filename,
+            "status": dataset.status,
+            "row_count": dataset.row_count,
+            "storage_available": _dataset_csv_path(dataset) is not None,
+        }
+    if name == "list_stored_csv_files":
+        root = csv_storage_root()
+        files = sorted(root.glob("*.csv"), key=lambda path: path.stat().st_mtime, reverse=True)
+        return [
+            {
+                "filename": path.name,
+                "size_bytes": path.stat().st_size,
+                "modified_at": path.stat().st_mtime,
+            }
+            for path in files[: arguments.get("limit", 20)]
+        ]
+    if name == "read_dataset_csv_sample":
+        return _read_dataset_csv_sample(db, arguments["dataset_id"], min(max(arguments.get("limit", 12), 1), 50))
     if name == "hunt_query":
         filters = deterministic_filters(arguments["query"])
         if arguments.get("min_risk_score") is not None:

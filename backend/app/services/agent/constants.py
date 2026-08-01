@@ -17,6 +17,8 @@ READ_ONLY_TOOLS = {
     "get_event",
     "list_vulnerabilities",
     "get_vulnerability_analysis",
+    "read_dataset_csv_sample",
+    "list_stored_csv_files",
 }
 WRITE_REVIEW_TOOLS: set[str] = set()
 HIGH_RISK_TOOLS = {"start_dataset_analysis", "generate_incident_report"}
@@ -74,6 +76,8 @@ Available tools:
 - get_event: inspect one event by event_id. Use only if the user gives an event_id or a prior tool result identifies one.
 - list_vulnerabilities: list vulnerability candidates for triage.
 - get_vulnerability_analysis: inspect one vulnerability candidate. Use only if the user gives a vulnerability_id or a prior tool result identifies one.
+- read_dataset_csv_sample: read stored CSV sample rows and metadata for the selected uploaded dataset.
+- list_stored_csv_files: list uploaded CSV files from the storage folder.
 - start_dataset_analysis: high-risk workflow action. Plan it only when the user asks to analyze/reanalyze/run processing.
 - generate_incident_report: high-risk workflow action. Plan it only when the user asks to generate a report.
 

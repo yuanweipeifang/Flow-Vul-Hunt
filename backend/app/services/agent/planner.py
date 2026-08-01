@@ -14,8 +14,10 @@ def planned_tools_fallback(request: AgentChatRequest) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     if request.dataset_id:
         calls.append({"name": "get_dataset", "arguments": dataset_args})
+        calls.append({"name": "read_dataset_csv_sample", "arguments": {**dataset_args, "limit": 12}})
     else:
         calls.append({"name": "list_datasets", "arguments": {"limit": 10}})
+        calls.append({"name": "list_stored_csv_files", "arguments": {"limit": 20}})
     if any(word in lowered for word in ("狩猎", "hunt", "高危", "威胁", "事件", "误报")):
         calls.append(
             {
@@ -69,6 +71,7 @@ def hermes_planned_tools(
         if name in allowed:
             if request.dataset_id and name in {
                 "get_dataset",
+                "read_dataset_csv_sample",
                 "hunt_query",
                 "attack_surface_map",
                 "red_team_hypotheses",
@@ -81,6 +84,8 @@ def hermes_planned_tools(
                 arguments.setdefault("exclude_suppressed", True)
                 arguments.setdefault("limit", 20)
             if name in {"attack_surface_map", "list_vulnerabilities"}:
+                arguments.setdefault("limit", 20)
+            if name in {"read_dataset_csv_sample", "list_stored_csv_files"}:
                 arguments.setdefault("limit", 20)
             if name == "red_team_hypotheses":
                 arguments.setdefault("limit", 10)

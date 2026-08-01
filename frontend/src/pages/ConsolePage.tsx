@@ -15,6 +15,62 @@ function StatCard({ label, value, hint, accent }: { label: string; value: string
   )
 }
 
+const pieColors = ['#34fcff', '#123dff', '#f59e0b', '#22c55e', '#c084fc', '#f87171']
+
+function DistributionPanel({ data, accent }: { data: Record<string, number> | undefined; accent: string }) {
+  const entries = Object.entries(data || {})
+    .map(([key, value]) => [key, Number(value) || 0] as const)
+    .filter(([, value]) => value > 0)
+  const total = entries.reduce((sum, [, value]) => sum + value, 0)
+  const max = Math.max(...entries.map(([, value]) => value), 1)
+  let cursor = 0
+  const gradient = entries.length
+    ? `conic-gradient(${entries.map(([, value], index) => {
+      const start = cursor
+      const end = cursor + (value / total) * 360
+      cursor = end
+      return `${pieColors[index % pieColors.length]} ${start}deg ${end}deg`
+    }).join(', ')})`
+    : `conic-gradient(${accent} 0deg 360deg)`
+
+  if (!entries.length) return <div className="empty">后端返回空数据</div>
+
+  return (
+    <div className="distribution-panel">
+      <div className="pie-block">
+        <div className="pie-chart" style={{ background: gradient }} aria-label={`total ${total}`}>
+          <div className="pie-center">
+            <strong>{fmtNumber(total)}</strong>
+            <span>total</span>
+          </div>
+        </div>
+        <div className="pie-legend">
+          {entries.map(([key, value], index) => (
+            <span key={key} title={`${key}: ${fmtNumber(value)}`}>
+              <i style={{ background: pieColors[index % pieColors.length] }} />
+              {key}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="bars">
+        {entries.map(([key, value], index) => (
+          <div className="bar-row" key={key}>
+            <span className="bar-label">{key}</span>
+            <span className="bar-track">
+              <span
+                className="bar-fill"
+                style={{ width: `${(value / max) * 100}%`, background: pieColors[index % pieColors.length] }}
+              />
+            </span>
+            <span className="bar-value">{fmtNumber(value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function ConsolePage({ context }: { context: AppContextValue }) {
   const { data: overview, error, loading } = useApiData(
     () => context.api<DashboardOverview>(`/api/dashboard/overview${queryString({ dataset_id: context.selectedDataset })}`),
@@ -91,28 +147,10 @@ export function ConsolePage({ context }: { context: AppContextValue }) {
 
           <div className="grid three section">
             <Card title="事件判定分布">
-              <div className="bars">
-                {Object.entries(overview?.events_by_verdict || {}).map(([key, value]) => (
-                  <div className="bar-row" key={key}>
-                    <span className="bar-label">{key}</span>
-                    <span className="bar-track"><span className="bar-fill" style={{ width: `${(Number(value) / Math.max(...Object.values(overview?.events_by_verdict || { a: 1 }), 1)) * 100}%`, background: 'var(--color-primary)' }} /></span>
-                    <span className="bar-value">{fmtNumber(value)}</span>
-                  </div>
-                ))}
-                {!Object.keys(overview?.events_by_verdict || {}).length && <div className="empty">后端返回空数据</div>}
-              </div>
+              <DistributionPanel data={overview?.events_by_verdict} accent="var(--color-primary)" />
             </Card>
             <Card title="Incident 严重度">
-              <div className="bars">
-                {Object.entries(overview?.incidents_by_severity || {}).map(([key, value]) => (
-                  <div className="bar-row" key={key}>
-                    <span className="bar-label">{key}</span>
-                    <span className="bar-track"><span className="bar-fill" style={{ width: `${(Number(value) / Math.max(...Object.values(overview?.incidents_by_severity || { a: 1 }), 1)) * 100}%`, background: 'var(--color-orange)' }} /></span>
-                    <span className="bar-value">{fmtNumber(value)}</span>
-                  </div>
-                ))}
-                {!Object.keys(overview?.incidents_by_severity || {}).length && <div className="empty">后端返回空数据</div>}
-              </div>
+              <DistributionPanel data={overview?.incidents_by_severity} accent="var(--color-orange)" />
             </Card>
             <Card title="高频攻击类型">
               <div className="bars">

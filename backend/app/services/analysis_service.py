@@ -111,10 +111,14 @@ def _evidence_supported(event: PayloadEvent, fragment: str) -> bool:
     return fragment in event.decoded_payload or fragment in event.raw_payload
 
 
-def _should_call_llm(event: PayloadEvent, rule_count: int, scope: str) -> bool:
+def _should_call_llm(event: PayloadEvent, rule_findings: list[dict], scope: str) -> bool:
+    actionable_findings = [
+        finding for finding in rule_findings
+        if finding.get("attack_type") != "high_entropy_payload"
+    ]
     if scope == "all":
-        return not event.is_binary or rule_count > 0
-    return rule_count > 0 or event.parse_status != "success" or (not event.is_binary and event.entropy >= 6.2)
+        return not event.is_binary or bool(actionable_findings)
+    return bool(actionable_findings) or event.parse_status != "success" or (not event.is_binary and event.entropy >= 6.2)
 
 
 def analyze_event(db: Session, event: PayloadEvent, use_llm: bool, llm_scope: str, force: bool) -> None:
@@ -152,7 +156,7 @@ def analyze_event(db: Session, event: PayloadEvent, use_llm: bool, llm_scope: st
             }
         )
 
-    if use_llm and _should_call_llm(event, len(matches), llm_scope):
+    if use_llm and _should_call_llm(event, finding_dicts, llm_scope):
         gateway = LLMGateway()
         context = _event_context(event, finding_dicts)
         try:
@@ -285,6 +289,7 @@ def run_analysis_job(job_id: str) -> None:
             job.phase = "analyzing_event"
             job.current_event_id = event.id
             job.last_heartbeat_at = heartbeat
+            db.commit()
             try:
                 analyze_event(db, event, job.use_llm, job.llm_scope, job.force)
                 job.succeeded += 1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -9,9 +10,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from ...audit import audit_log
 from ...config import Settings, get_settings
-from ...llm.gateway import LLMResponseError, LLMUnavailableError
+from ...llm.gateway import LLMGateway, LLMResponseError, LLMUnavailableError
 from ...models import AgentRun, AgentSession
-from ...schemas import AgentChatRequest, AgentChatResult, AgentToolCallOut
+from ...schemas import AgentAnswerDraft, AgentChatRequest, AgentChatResult, AgentToolCallOut
 from ...security import Actor
 from .collaboration import CollaborationMessage, build_collaboration
 from .isolation import agent_status
@@ -26,6 +27,80 @@ _LOCAL_PLAN = [
     "汇总漏洞候选并给出研判重点",
     "高风险动作在确认后再执行",
 ]
+
+_CHAT_SYSTEM_PROMPT = """You are Flow-Vul-Hunt's security analysis agent.
+Return one JSON object only. Answer in Chinese.
+
+Use the supplied dataset metadata, stored CSV samples, hunt results, attack-surface summaries, vulnerability candidates, and tool evidence.
+If CSV samples are present, explicitly use them as traffic evidence.
+Do not invent assets, exploit success, attacker identity, CVEs, or validation results.
+Keep active validation recommendations inside the project's safe workflow.
+
+Schema:
+{
+  "answer": "direct answer for the user",
+  "key_observations": ["evidence-backed observation"],
+  "suggested_next_questions": ["short follow-up question the user can ask"]
+}
+"""
+
+
+def _compact_tool_calls(tool_calls: list[AgentToolCallOut]) -> list[dict[str, Any]]:
+    compact = []
+    for call in tool_calls:
+        result = call.result
+        if isinstance(result, (dict, list)):
+            serialized = json.dumps(result, ensure_ascii=False, default=str)
+            if len(serialized) > 12000:
+                serialized = serialized[:12000] + "\n[TRUNCATED]"
+            result = serialized
+        compact.append(
+            {
+                "name": call.name,
+                "status": call.status,
+                "arguments": call.arguments,
+                "error": call.error,
+                "result": result,
+            }
+        )
+    return compact
+
+
+def _llm_chat_answer(
+    request: AgentChatRequest,
+    tool_calls: list[AgentToolCallOut],
+    consensus: dict[str, Any],
+    settings: Settings,
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    if not settings.llm_enabled:
+        return None, None, "LLM provider is not configured"
+    payload = {
+        "user_message": request.message,
+        "dataset_id": request.dataset_id,
+        "tool_calls": _compact_tool_calls(tool_calls),
+        "consensus": consensus,
+    }
+    try:
+        result = LLMGateway(settings).complete_json(
+            _CHAT_SYSTEM_PROMPT,
+            payload,
+            AgentAnswerDraft,
+            agent_name="security_brain",
+        )
+    except Exception as exc:
+        return None, None, f"LLM answer unavailable: {exc}"
+    draft = result.data
+    answer = draft.answer.strip()
+    if draft.key_observations:
+        answer += "\n\n关键观察：\n" + "\n".join(f"- {item}" for item in draft.key_observations)
+    if draft.suggested_next_questions:
+        answer += "\n\n你可以继续问：\n" + "\n".join(f"- {item}" for item in draft.suggested_next_questions)
+    return answer, {
+        "provider": result.provider_name,
+        "model": result.model_name,
+        "latency_ms": result.latency_ms,
+        "token_usage": result.token_usage,
+    }, None
 
 
 def run_agent_chat(
@@ -117,6 +192,14 @@ def run_agent_chat(
         answer = f"{collaboration_answer} 工具执行概况：计划 {len(planned)} 步，已执行 {len(executed)} 个。"
         if blocked:
             answer += f" {len(blocked)} 个高风险或受限工具仍需确认。"
+    llm_answer, llm_meta, llm_warning = _llm_chat_answer(request, tool_calls, consensus, settings)
+    if llm_answer:
+        answer = llm_answer
+        llm_used = True
+        consensus = {**consensus, "llm_answer": llm_meta}
+    elif llm_warning:
+        warning = f"{warning}; {llm_warning}" if warning else llm_warning
+
     result = AgentChatResult(
         session_id=session_id,
         runtime=status.runtime,

@@ -49,7 +49,7 @@ export function DatasetsPage({ context }: { context: AppContextValue }) {
     try {
       await context.api<JobOut>(`/api/datasets/${datasetId}/analyze`, {
         method: 'POST',
-        body: JSON.stringify({ use_llm: true, llm_scope: 'suspicious', force: false }),
+        body: JSON.stringify({ use_llm: false, llm_scope: 'suspicious', force: false }),
       })
       await context.refreshGlobal()
       setReloadToken((value) => value + 1)

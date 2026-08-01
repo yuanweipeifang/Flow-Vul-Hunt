@@ -34,6 +34,8 @@ DEFAULT_AGENT_ALLOWED_TOOLS = (
     "get_vulnerability_analysis",
     "start_dataset_analysis",
     "generate_incident_report",
+    "read_dataset_csv_sample",
+    "list_stored_csv_files",
 )
 
 

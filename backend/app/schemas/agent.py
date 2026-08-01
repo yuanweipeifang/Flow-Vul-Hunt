@@ -121,3 +121,9 @@ class AgentTraceOut(BaseModel):
 
 class AgentConfirmRequest(BaseModel):
     tool_call_ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class AgentAnswerDraft(BaseModel):
+    answer: str = Field(max_length=5000)
+    key_observations: list[str] = Field(default_factory=list, max_length=12)
+    suggested_next_questions: list[str] = Field(default_factory=list, max_length=6)

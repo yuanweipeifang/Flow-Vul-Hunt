@@ -320,6 +320,23 @@ export interface AgentToolCallOut {
   error: string | null
 }
 
+export interface AgentChatResult {
+  session_id: string
+  runtime: string
+  hermes_isolated: boolean
+  plan: string[]
+  tool_calls: AgentToolCallOut[]
+  answer: string
+  requires_confirmation: boolean
+  warning: string | null
+  planner_used: string
+  collaboration_mode: string
+  agents: AgentMessageOut[]
+  consensus: JsonObject
+  evidence_gaps: string[]
+  llm_used: boolean
+}
+
 export interface AgentRunOut {
   id: string
   session_id: string
