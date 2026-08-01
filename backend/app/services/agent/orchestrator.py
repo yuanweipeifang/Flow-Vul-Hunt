@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
 from typing import Any
 
 from ...config import Settings
@@ -23,13 +24,28 @@ class AgentOrchestrator:
         db,
         background_tasks,
         allowed: set[str],
+        event_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> tuple[list[AgentToolCallOut], list[RoleExecution], dict[str, Any], list[str], str]:
-        tool_calls = self._execute_tools(request, planned, db, background_tasks, allowed)
+        self._emit(event_callback, "tools_started", {"planned_tool_count": len(planned)})
+        tool_calls = self._execute_tools(request, planned, db, background_tasks, allowed, event_callback)
+        self._emit(
+            event_callback,
+            "tools_finished",
+            {
+                "tool_call_count": len(tool_calls),
+                "executed_tool_count": len([call for call in tool_calls if call.status == "executed"]),
+                "blocked_tool_count": len([call for call in tool_calls if call.status == "blocked"]),
+                "failed_tool_count": len([call for call in tool_calls if call.status == "failed"]),
+            },
+        )
         memory_context = self._load_memory(db, request)
-        role_executions = self._execute_roles(request, tasks, tool_calls, memory_context)
-        role_executions = self._apply_follow_up_tasks(request, tasks, tool_calls, role_executions, memory_context)
+        self._emit(event_callback, "roles_started", {"task_count": len(tasks)})
+        role_executions = self._execute_roles(request, tasks, tool_calls, memory_context, event_callback)
+        role_executions = self._apply_follow_up_tasks(request, tasks, tool_calls, role_executions, memory_context, event_callback)
+        self._emit(event_callback, "roles_finished", {"role_execution_count": len(role_executions)})
         self._store_memory(db, request, role_executions)
         consensus, evidence_gaps, answer = self._build_consensus(role_executions)
+        self._emit(event_callback, "consensus_built", {"evidence_gap_count": len(evidence_gaps)})
         return tool_calls, role_executions, consensus, evidence_gaps, answer
 
     def _execute_tools(
@@ -39,6 +55,7 @@ class AgentOrchestrator:
         db,
         background_tasks,
         allowed: set[str],
+        event_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> list[AgentToolCallOut]:
         tool_calls: list[AgentToolCallOut] = []
         for index, planned_call in enumerate(planned, start=1):
@@ -52,6 +69,11 @@ class AgentOrchestrator:
                 arguments=planned_call["arguments"],
                 status="planned",
                 requires_confirmation=risk_level == "high_risk",
+            )
+            self._emit(
+                event_callback,
+                "tool_call_started",
+                {"id": call.id, "name": call.name, "risk_level": call.risk_level},
             )
             if name not in allowed:
                 call.status = "blocked"
@@ -70,6 +92,18 @@ class AgentOrchestrator:
                     call.status = "failed"
                     call.error = f"{type(exc).__name__}: {exc}"[:500]
             tool_calls.append(call)
+            self._emit(
+                event_callback,
+                "tool_call_finished",
+                {
+                    "id": call.id,
+                    "name": call.name,
+                    "risk_level": call.risk_level,
+                    "status": call.status,
+                    "requires_confirmation": call.requires_confirmation,
+                    "error": call.error,
+                },
+            )
         return tool_calls
 
     def _execute_roles(
@@ -78,6 +112,7 @@ class AgentOrchestrator:
         tasks: list[AgentTaskSpec],
         tool_calls: list[AgentToolCallOut],
         memory_context: list[AgentMemory],
+        event_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> list[RoleExecution]:
         executions: list[RoleExecution] = []
         completed: dict[str, RoleExecution] = {}
@@ -116,6 +151,16 @@ class AgentOrchestrator:
                         )
                         executions.append(completed[task.task_id])
                         pending.pop(task.task_id, None)
+                        self._emit(
+                            event_callback,
+                            "task_finished",
+                            {
+                                "task_id": task.task_id,
+                                "agent_name": task.agent_name,
+                                "status": "failed",
+                                "error": "role_not_registered",
+                            },
+                        )
                         continue
                     context = {
                         "request": request,
@@ -127,6 +172,11 @@ class AgentOrchestrator:
                         "memory_context": memory_context,
                     }
                     role: AgentRole = role_cls(self.settings)
+                    self._emit(
+                        event_callback,
+                        "task_started",
+                        {"task_id": task.task_id, "agent_name": task.agent_name, "goal": task.goal},
+                    )
                     future_map[pool.submit(role.run, task, context)] = task
                 for future in as_completed(future_map):
                     task = future_map[future]
@@ -144,6 +194,18 @@ class AgentOrchestrator:
                     completed[task.task_id] = execution
                     executions.append(execution)
                     pending.pop(task.task_id, None)
+                    self._emit(
+                        event_callback,
+                        "task_finished",
+                        {
+                            "task_id": task.task_id,
+                            "agent_name": task.agent_name,
+                            "status": execution.status,
+                            "llm_used": execution.llm_used,
+                            "confidence": execution.confidence,
+                            "error": execution.error,
+                        },
+                    )
         executions.sort(key=lambda item: item.task.priority, reverse=True)
         return executions
 
@@ -154,6 +216,7 @@ class AgentOrchestrator:
         tool_calls: list[AgentToolCallOut],
         executions: list[RoleExecution],
         memory_context: list[AgentMemory],
+        event_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> list[RoleExecution]:
         verifier = next((item for item in reversed(executions) if item.task.agent_name == "evidence_verifier"), None)
         if not verifier or verifier.resolved:
@@ -181,7 +244,8 @@ class AgentOrchestrator:
             )
         if not new_tasks:
             return executions
-        followup_executions = self._execute_roles(request, new_tasks, tool_calls, memory_context)
+        self._emit(event_callback, "followup_started", {"task_count": len(new_tasks)})
+        followup_executions = self._execute_roles(request, new_tasks, tool_calls, memory_context, event_callback)
         merged = [*executions, *followup_executions]
         final_verifier_task = AgentTaskSpec(
             task_id="followup-verify",
@@ -190,9 +254,10 @@ class AgentOrchestrator:
             depends_on=[task.task_id for task in new_tasks],
             priority=4,
         )
-        final_verifier = self._execute_roles(request, [final_verifier_task], tool_calls, memory_context)
+        final_verifier = self._execute_roles(request, [final_verifier_task], tool_calls, memory_context, event_callback)
         merged.extend(final_verifier)
         merged.sort(key=lambda item: item.task.priority, reverse=True)
+        self._emit(event_callback, "followup_finished", {"role_execution_count": len(merged)})
         return merged
 
     def _load_memory(self, db, request: AgentChatRequest) -> list[AgentMemory]:
@@ -255,3 +320,12 @@ class AgentOrchestrator:
             f"待补证据 {len(evidence_gaps)} 条，建议下一步 {len(consensus['recommended_next_steps'])} 条。"
         )
         return consensus, evidence_gaps, answer
+
+    @staticmethod
+    def _emit(
+        event_callback: Callable[[str, dict[str, Any]], None] | None,
+        event: str,
+        data: dict[str, Any],
+    ) -> None:
+        if event_callback:
+            event_callback(event, data)

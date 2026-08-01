@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -65,9 +66,19 @@ def run_agent_chat(
     background_tasks: BackgroundTasks,
     actor: Actor,
     settings: Settings | None = None,
+    event_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> AgentChatResult:
     settings = settings or get_settings()
     status = agent_status(settings)
+    _emit_agent_event(
+        event_callback,
+        "started",
+        {
+            "runtime": status.runtime,
+            "hermes_isolated": status.hermes_isolated,
+            "collaboration_enabled": settings.agent_collaboration_enabled,
+        },
+    )
     # #region debug-point A:chat-entry
     _debug_event(
         "A",
@@ -89,6 +100,11 @@ def run_agent_chat(
     warning = None
     planner_used = "local"
     final_focus = None
+    _emit_agent_event(
+        event_callback,
+        "planner_started",
+        {"hermes_available": status.hermes_available, "llm_enabled": settings.llm_enabled},
+    )
     if status.hermes_available and settings.llm_enabled:
         try:
             plan, planned, tasks, final_focus = hermes_planned_tools(request, settings, allowed)
@@ -100,6 +116,18 @@ def run_agent_chat(
         plan, planned, tasks, final_focus = planned_task_graph_fallback(request)
         if not status.hermes_available:
             warning = "Hermes 包尚未安装，当前使用本项目内置 planner；接口和隔离目录已就绪。"
+    _emit_agent_event(
+        event_callback,
+        "planner_finished",
+        {
+            "planner_used": planner_used,
+            "plan": plan,
+            "planned_tool_count": len(planned),
+            "task_graph": [task.model_dump(mode="json") for task in tasks],
+            "warning": warning,
+            "final_focus": final_focus,
+        },
+    )
     # #region debug-point A:planner-output
     _debug_event(
         "A",
@@ -119,6 +147,11 @@ def run_agent_chat(
     # #endregion
 
     orchestrator = AgentOrchestrator(settings)
+    _emit_agent_event(
+        event_callback,
+        "orchestrator_started",
+        {"task_count": len(tasks), "planned_tool_count": len(planned)},
+    )
     # #region debug-point C:orchestrator-start
     _debug_event(
         "C",
@@ -134,6 +167,16 @@ def run_agent_chat(
         db=db,
         background_tasks=background_tasks,
         allowed=allowed,
+        event_callback=event_callback,
+    )
+    _emit_agent_event(
+        event_callback,
+        "orchestrator_finished",
+        {
+            "tool_call_count": len(tool_calls),
+            "role_execution_count": len(role_executions),
+            "evidence_gap_count": len(evidence_gaps),
+        },
     )
     # #region debug-point C:orchestrator-finish
     _debug_event(
@@ -156,12 +199,14 @@ def run_agent_chat(
     agents: list[CollaborationMessage] = []
     answer = collaboration_answer
     if settings.agent_collaboration_enabled:
+        _emit_agent_event(event_callback, "collaboration_started", {"role_execution_count": len(role_executions)})
         agents, consensus, evidence_gaps, collaboration_answer = build_collaboration(
             request, planned, tool_calls, settings, role_executions
         )
         answer = f"{collaboration_answer} 工具执行概况：计划 {len(planned)} 步，已执行 {len([call for call in tool_calls if call.status == 'executed'])} 个。"
         if requires_confirmation:
             answer += " 高风险工具仍需确认。"
+        _emit_agent_event(event_callback, "collaboration_finished", {"agent_message_count": len(agents)})
     llm_used = planner_used == "hermes" or any(execution.llm_used for execution in role_executions)
     result = AgentChatResult(
         session_id=session_id,
@@ -211,6 +256,16 @@ def run_agent_chat(
         },
     )
     db.commit()
+    _emit_agent_event(
+        event_callback,
+        "result",
+        {
+            "session_id": session_id,
+            "requires_confirmation": result.requires_confirmation,
+            "llm_used": result.llm_used,
+            "result": result.model_dump(mode="json"),
+        },
+    )
     # #region debug-point B:commit-finished
     _debug_event(
         "B",
@@ -224,6 +279,15 @@ def run_agent_chat(
     )
     # #endregion
     return result
+
+
+def _emit_agent_event(
+    event_callback: Callable[[str, dict[str, Any]], None] | None,
+    event: str,
+    data: dict[str, Any],
+) -> None:
+    if event_callback:
+        event_callback(event, data)
 
 
 def confirm_agent_tools(

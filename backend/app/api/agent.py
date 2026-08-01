@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import json
+import queue
+import threading
+from collections.abc import Iterator
+from typing import Any
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..database import get_db
+from ..database import SessionLocal, get_db
 from ..models import AgentMemory, AgentRun, AgentSession
 from ..schemas import AgentChatRequest, AgentChatResult, AgentConfirmRequest, AgentMemoryOut, AgentSessionOut, AgentStatusOut, AgentTraceOut
 from ..security import Actor, get_actor, require_roles
@@ -54,6 +61,24 @@ def agent_chat(
     if not settings.agent_enabled:
         raise HTTPException(status_code=503, detail="agent is disabled; set AGENT_ENABLED=true")
     return run_agent_chat(request, db, background_tasks, actor, settings)
+
+
+@router.post("/chat/stream")
+def agent_chat_stream(
+    request: AgentChatRequest,
+    actor: Actor = Depends(require_roles("admin", "analyst")),
+) -> StreamingResponse:
+    settings = get_settings()
+    if not settings.agent_enabled:
+        raise HTTPException(status_code=503, detail="agent is disabled; set AGENT_ENABLED=true")
+    return StreamingResponse(
+        _stream_agent_chat(request, actor),
+        media_type="text/event-stream; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/sessions", response_model=list[AgentSessionOut])
@@ -135,3 +160,37 @@ def _session_out(session: AgentSession) -> AgentSessionOut:
         tool_calls=[tool_call_out(call) for call in session.tool_calls],
         runs=[run_out(run) for run in session.runs],
     )
+
+
+def _stream_agent_chat(request: AgentChatRequest, actor: Actor) -> Iterator[str]:
+    events: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
+
+    def emit(event: str, data: dict[str, Any]) -> None:
+        events.put((event, data))
+
+    def worker() -> None:
+        db = SessionLocal()
+        try:
+            run_agent_chat(request, db, BackgroundTasks(), actor, get_settings(), event_callback=emit)
+        except HTTPException as exc:
+            emit("error", {"status_code": exc.status_code, "detail": exc.detail})
+        except Exception as exc:
+            emit("error", {"error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            db.close()
+            events.put(None)
+
+    thread = threading.Thread(target=worker, name="agent-chat-stream", daemon=True)
+    thread.start()
+    yield _sse("connected", {"status": "stream_open"})
+    while True:
+        item = events.get()
+        if item is None:
+            break
+        event, data = item
+        yield _sse(event, data)
+    yield _sse("done", {"status": "stream_closed"})
+
+
+def _sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
