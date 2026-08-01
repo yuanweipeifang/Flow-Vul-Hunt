@@ -14,14 +14,14 @@ load_dotenv(BASE_DIR / ".env.agent", override=True)
 
 PROVIDER_NAMES = ("deepseek", "bailian", "zhipu")
 DEFAULT_AGENT_ROUTES = {
-    "coordinator": ("bailian", "deepseek", "zhipu"),
-    "payload_analyst": ("deepseek", "bailian", "zhipu"),
-    "evidence_verifier": ("zhipu", "bailian", "deepseek"),
-    "hunt_interpreter": ("bailian", "zhipu", "deepseek"),
-    "vulnerability_researcher": ("zhipu", "bailian", "deepseek"),
-    "report_generator": ("bailian", "deepseek", "zhipu"),
-    "security_brain": ("bailian", "deepseek", "zhipu"),
-    "connection_test": ("deepseek", "bailian", "zhipu"),
+    "coordinator": ("deepseek",),
+    "payload_analyst": ("deepseek",),
+    "evidence_verifier": ("deepseek",),
+    "hunt_interpreter": ("deepseek",),
+    "vulnerability_researcher": ("deepseek",),
+    "report_generator": ("deepseek",),
+    "security_brain": ("deepseek",),
+    "connection_test": ("deepseek",),
 }
 DEFAULT_AGENT_ALLOWED_TOOLS = (
     "list_datasets",

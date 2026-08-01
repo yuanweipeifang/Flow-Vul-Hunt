@@ -318,6 +318,8 @@ def test_agent_executes_read_only_tools_and_blocks_high_risk_without_confirmatio
     names = {agent.agent_name for agent in result.agents}
     assert {"coordinator", "payload_analyst", "hunt_interpreter", "vulnerability_researcher", "evidence_verifier", "report_generator"} <= names
     assert result.consensus["confirmed_facts"]
+    assert result.task_graph
+    assert any(task.agent_name == "evidence_verifier" for task in result.task_graph)
     assert result.evidence_gaps
     blocked = [call for call in result.tool_calls if call.name == "start_dataset_analysis"]
     assert blocked and blocked[0].status == "blocked"
@@ -325,6 +327,7 @@ def test_agent_executes_read_only_tools_and_blocks_high_risk_without_confirmatio
     assert db_session.query(AuditLog).filter_by(action="agent.chat").count() == 1
     stored = db_session.get(AgentSession, result.session_id)
     assert stored.status == "waiting_confirmation"
+    assert stored.task_graph
     assert len(stored.tool_calls) == len(result.tool_calls)
     assert db_session.query(AgentRun).filter_by(session_id=result.session_id).count() == 1
     assert db_session.query(AgentMessage).filter_by(session_id=result.session_id).count() >= 6
@@ -510,3 +513,58 @@ def test_vulnerability_analysis_view_includes_triage_context(db_session) -> None
     assert result.related_event.id == event.id
     assert "命中内网地址参数" in result.confidence_factors
     assert result.false_positive_risks
+
+
+def test_agent_chat_result_keeps_task_graph_and_fallback_answer(db_session) -> None:
+    settings = Settings(
+        app_name="test",
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        max_upload_bytes=1,
+        max_payload_chars=1000,
+        llm_timeout_seconds=1,
+        llm_max_retries=0,
+        llm_max_input_chars=1000,
+        providers={},
+        agent_routes={},
+        agent_enabled=True,
+        agent_collaboration_enabled=True,
+    )
+    dataset = Dataset(
+        name="merge-contract",
+        filename="merge.csv",
+        file_sha256="f" * 64,
+        row_count=1,
+        status="ready",
+    )
+    db_session.add(dataset)
+    db_session.flush()
+    db_session.add(
+        PayloadEvent(
+            dataset_id=dataset.id,
+            row_number=1,
+            raw_payload="GET /search?q=hello HTTP/1.1",
+            decoded_payload="GET /search?q=hello HTTP/1.1",
+            payload_hash="1" * 64,
+            risk_score=0,
+            verdict="benign",
+        )
+    )
+    db_session.commit()
+
+    result = run_agent_chat(
+        AgentChatRequest(
+            message="Summarize this dataset",
+            dataset_id=dataset.id,
+            auto_execute=False,
+        ),
+        db_session,
+        BackgroundTasks(),
+        Actor("api_key:analyst", "analyst", True),
+        settings,
+    )
+
+    assert result.answer
+    assert result.task_graph
+    assert result.collaboration_mode == "multi_agent"
+    assert result.llm_used is False

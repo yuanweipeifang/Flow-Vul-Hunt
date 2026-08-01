@@ -8,6 +8,17 @@ from pydantic import BaseModel, Field
 from .base import ORMModel
 
 
+class AgentTaskSpecOut(BaseModel):
+    task_id: str
+    agent_name: str
+    goal: str
+    tool_names: list[str] = []
+    depends_on: list[str] = []
+    priority: int = 0
+    requires_confirmation: bool = False
+    status: str = "pending"
+
+
 class AgentChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     dataset_id: str | None = None
@@ -32,6 +43,10 @@ class AgentMessageOut(BaseModel):
     agent_name: str
     role: str
     task: str
+    message_type: str = "result"
+    recipient: str | None = None
+    follow_up_action: dict[str, Any] = {}
+    resolved: bool = False
     input_summary: dict[str, Any]
     output: dict[str, Any]
     depends_on: list[str] = []
@@ -57,6 +72,7 @@ class AgentRunOut(BaseModel):
     error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    task_graph: list[AgentTaskSpecOut] = []
     messages: list[AgentMessageOut] = []
 
 
@@ -71,6 +87,7 @@ class AgentChatResult(BaseModel):
     warning: str | None = None
     planner_used: str = "local"
     collaboration_mode: str = "single_planner"
+    task_graph: list[AgentTaskSpecOut] = []
     agents: list[AgentMessageOut] = []
     consensus: dict[str, Any] = Field(default_factory=dict)
     evidence_gaps: list[str] = Field(default_factory=list)
@@ -110,6 +127,7 @@ class AgentSessionOut(ORMModel):
     requires_confirmation: bool
     created_at: datetime
     updated_at: datetime
+    task_graph: list[AgentTaskSpecOut] = []
     tool_calls: list[AgentToolCallOut] = []
     runs: list[AgentRunOut] = []
 
@@ -127,3 +145,15 @@ class AgentAnswerDraft(BaseModel):
     answer: str = Field(max_length=5000)
     key_observations: list[str] = Field(default_factory=list, max_length=12)
     suggested_next_questions: list[str] = Field(default_factory=list, max_length=6)
+
+
+class AgentMemoryOut(ORMModel):
+    id: str
+    dataset_id: str | None
+    agent_name: str
+    memory_type: str
+    summary: str
+    content: dict[str, Any]
+    confidence: float
+    created_at: datetime
+    updated_at: datetime

@@ -92,6 +92,13 @@ function App() {
     () => ({ apiConfig, datasets, selectedDataset, setSelectedDataset, health, healthError, metrics, refreshGlobal, api }),
     [api, apiConfig, datasets, health, healthError, metrics, refreshGlobal, selectedDataset],
   )
+  const healthTone = healthError
+    ? 'bad'
+    : health?.status === 'ok' && health.database_writable
+      ? 'ok'
+      : 'warn'
+  const healthStatus = health?.status || (healthError ? 'error' : 'checking')
+  const databaseWritable = health ? String(health.database_writable) : healthError ? 'unknown' : 'checking'
 
   const navItemsWithIcons: Array<[string, string, string]> = [
     ['/home', '主页', '🏠'],
@@ -124,6 +131,18 @@ function App() {
         </nav>
         <div className="api-panel">
           <div className="status-pill"><span className={`status-dot ${tone === 'ok' ? '' : tone}`} /><span>{status}</span></div>
+          <div className="sidebar-health" aria-live="polite">
+            <div className="sidebar-health-row">
+              <span className={`status-dot ${healthTone === 'ok' ? '' : healthTone}`} />
+              <span>运行健康：</span>
+              <strong>{healthStatus}</strong>
+            </div>
+            <div className="sidebar-health-row">
+              <span className={`status-dot ${healthTone === 'ok' ? '' : healthTone}`} />
+              <span>数据库可写：</span>
+              <strong>{databaseWritable}</strong>
+            </div>
+          </div>
           <label>
             <span>API 地址</span>
             <input value={apiConfig.baseUrl} onChange={(event) => setApiConfig((current) => ({ ...current, baseUrl: event.target.value }))} />

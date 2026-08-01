@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from sqlalchemy import create_engine, inspect, text
+
 
 def _load_launcher():
     launcher_path = Path(__file__).resolve().parents[2] / "run_backend.py"
@@ -41,6 +43,34 @@ def test_launcher_starts_uvicorn_with_observable_defaults(monkeypatch) -> None:
 def test_manual_review_routes_are_not_registered() -> None:
     from app.main import app
 
-    paths = {route.path for route in app.routes}
+    paths = {path for route in app.routes if (path := getattr(route, "path", None))}
     assert "/api/events/bulk/annotate" not in paths
     assert "/api/events/{event_id}/annotations" not in paths
+
+
+def test_run_migrations_commits_schema_version(tmp_path, monkeypatch) -> None:
+    from app.config import Settings
+    from app.database import run_migrations
+
+    database_url = f"sqlite:///{(tmp_path / 'migration.db').as_posix()}"
+    settings = Settings(
+        app_name="test",
+        app_env="test",
+        database_url=database_url,
+        max_upload_bytes=1,
+        max_payload_chars=1,
+        llm_timeout_seconds=1,
+        llm_max_retries=0,
+        llm_max_input_chars=1,
+        providers={},
+        agent_routes={},
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+
+    run_migrations()
+
+    engine = create_engine(database_url)
+    with engine.connect() as connection:
+        version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert version == "0009"
+    assert "task_graph" in {column["name"] for column in inspect(engine).get_columns("agent_sessions")}

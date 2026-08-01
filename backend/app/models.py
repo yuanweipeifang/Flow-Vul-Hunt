@@ -281,6 +281,7 @@ class AgentSession(Base):
     planner_used: Mapped[str] = mapped_column(String(32), index=True)
     status: Mapped[str] = mapped_column(String(32), default="completed", index=True)
     plan: Mapped[list] = mapped_column(JSON, default=list)
+    task_graph: Mapped[list] = mapped_column(JSON, default=list)
     answer: Mapped[str] = mapped_column(Text)
     warning: Mapped[str | None] = mapped_column(Text)
     requires_confirmation: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -304,6 +305,7 @@ class AgentRun(Base):
     llm_used: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     consensus: Mapped[dict] = mapped_column(JSON, default=dict)
     evidence_gaps: Mapped[list] = mapped_column(JSON, default=list)
+    task_graph: Mapped[list] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -322,6 +324,10 @@ class AgentMessage(Base):
     agent_name: Mapped[str] = mapped_column(String(64), index=True)
     role: Mapped[str] = mapped_column(String(64), index=True)
     task: Mapped[str] = mapped_column(Text)
+    message_type: Mapped[str] = mapped_column(String(32), default="result", index=True)
+    recipient: Mapped[str | None] = mapped_column(String(64), index=True)
+    follow_up_action: Mapped[dict] = mapped_column(JSON, default=dict)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     input_summary: Mapped[dict] = mapped_column(JSON, default=dict)
     output: Mapped[dict] = mapped_column(JSON, default=dict)
     depends_on: Mapped[list] = mapped_column(JSON, default=list)
@@ -333,6 +339,20 @@ class AgentMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     run: Mapped[AgentRun] = relationship(back_populates="messages")
+
+
+class AgentMemory(Base):
+    __tablename__ = "agent_memory"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    dataset_id: Mapped[str | None] = mapped_column(ForeignKey("datasets.id", ondelete="SET NULL"), index=True)
+    agent_name: Mapped[str] = mapped_column(String(64), index=True)
+    memory_type: Mapped[str] = mapped_column(String(32), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class AgentToolCall(Base):
