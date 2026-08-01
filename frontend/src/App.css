@@ -3320,6 +3320,150 @@ pre {
   gap: 1rem;
 }
 
+/* ── Workflow split: session rail + canvas ── */
+.workflow-split {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.session-rail {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: .55rem;
+  min-height: 460px;
+}
+
+.session-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .35rem .15rem;
+  color: var(--text-secondary);
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.session-rail-head small {
+  color: var(--color-cyan);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-rail-list {
+  display: grid;
+  gap: .5rem;
+  align-content: start;
+  overflow: auto;
+  max-height: 560px;
+  padding-right: .25rem;
+}
+
+.session-rail-item {
+  display: grid;
+  gap: .35rem;
+  text-align: left;
+  padding: .55rem .65rem;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgba(2, 8, 50, 0.34);
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+}
+
+.session-rail-item:hover {
+  border-color: var(--border-hover);
+  background: rgba(12, 24, 88, .55);
+  transform: translateX(2px);
+}
+
+.session-rail-item.active {
+  border-color: rgba(52, 252, 255, .55);
+  border-left-color: var(--color-cyan);
+  background:
+    linear-gradient(90deg, rgba(52, 252, 255, .14), rgba(5, 12, 52, .5)),
+    rgba(10, 18, 72, .6);
+  box-shadow: 0 0 14px rgba(52, 252, 255, .16);
+}
+
+.session-rail-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  align-items: center;
+}
+
+.session-rail-item p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: .82rem;
+  font-weight: 600;
+  line-height: 1.4;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.session-rail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  color: var(--text-muted);
+  font-size: .68rem;
+}
+
+.workflow-canvas-area {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: .65rem;
+  min-width: 0;
+}
+
+.workflow-canvas-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .8rem;
+  flex-wrap: wrap;
+  padding: .35rem .15rem;
+}
+
+.workflow-canvas-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.workflow-canvas-title span {
+  color: var(--text-secondary);
+  font-size: .84rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.workflow-canvas-actions {
+  display: flex;
+  gap: .45rem;
+  flex-shrink: 0;
+}
+
+.workflow-collapsibles {
+  display: grid;
+  gap: .65rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--border-color);
+}
+
 .chat-window {
   min-height: 430px;
   max-height: 58vh;
@@ -4779,6 +4923,16 @@ pre {
   .detail-summary-grid,
   .detail-mini-item {
     grid-template-columns: 1fr;
+  }
+  .workflow-split {
+    grid-template-columns: 1fr;
+  }
+  .session-rail-list {
+    max-height: 260px;
+  }
+  .workflow-canvas-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
   .review-row-actions {
     justify-content: flex-start;

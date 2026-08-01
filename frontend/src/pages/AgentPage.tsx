@@ -613,7 +613,7 @@ export function AgentPage({ context }: { context: AppContextValue }) {
 
   return (
     <>
-      <PageHeader title="Agent 会话" description="以工作流画布为核心，可视化各 Agent 任务与依赖；消息流、长期记忆按需展开。">
+      <PageHeader title="Agent 会话" description="左侧选择会话驱动右侧画布，任务图、消息流与长期记忆在同一卡片内串联呈现。">
         <label className="field">
           <span>数据集</span>
           <select value={context.selectedDataset} onChange={(event) => context.setSelectedDataset(event.target.value)}>
@@ -725,107 +725,112 @@ export function AgentPage({ context }: { context: AppContextValue }) {
               </div>
             ) : <Empty text="后端返回空 Provider 列表" />}
           </Card>
-
-          <Card title="最近会话">
-            {sessions.length ? (
-              <div className="cards-list">
-                {sessions.slice(0, 12).map((session) => (
-                  <button className="history-item" type="button" key={session.id} onClick={() => loadSessionIntoChat(session)}>
-                    <span>{session.message}</span>
-                    <Badge text={session.status} tone={statusTone(session.status)} />
-                  </button>
-                ))}
-              </div>
-            ) : <Empty text="暂无历史会话" />}
-          </Card>
         </aside>
       </div>
 
       <Card
         title={`工作流画布${selectedSession ? ` · ${selectedSession.id.slice(0, 8)}` : ''}`}
-        description="按依赖深度分层渲染任务节点，点击任意节点查看任务详情。无任务时画布展示空状态。"
+        description="左侧选择会话，右侧按依赖深度分层渲染任务节点；点击节点查看任务详情，下方折叠面板按需展开。"
       >
-        {selectedSession ? (
-          <TaskGraphCanvas session={selectedSession} onSelectTask={setDetailTask} />
-        ) : (
-          <div className="task-canvas task-canvas-empty">
-            <Empty text="选择或发起一次会话后，画布将渲染对应任务图" />
-          </div>
-        )}
-      </Card>
-
-      <Card title="Agent 会话" description="按时间倒序展示历史会话，点击「选中」加载到画布与折叠面板，点击「详细信息」查看完整上下文。">
-        {sessions.length ? (
-          <div className="review-list">
-            {sessions.map((session) => {
-              const messageCount = session.runs.reduce((total, run) => total + run.messages.length, 0)
-              const isActive = selectedSession?.id === session.id
-              return (
-                <article className="review-row" key={session.id} style={isActive ? { borderColor: 'rgba(52, 252, 255, .55)' } : undefined}>
-                  <div className="review-row-main">
-                    <div className="review-row-top">
-                      <Badge text={session.id.slice(0, 8)} tone="blue" />
-                      <Badge text={session.status} tone={statusTone(session.status)} />
-                      <Badge text={session.runs.some((run) => run.llm_used) ? 'LLM' : 'local'} tone="purple" />
-                    </div>
-                    <h3>{session.message}</h3>
-                    <p>{session.answer}</p>
-                    <div className="review-row-meta">
-                      <span>{session.actor}</span>
-                      <span>{fmtDate(session.created_at)}</span>
-                      <span>{fmtNumber(session.tool_calls.length)} tools</span>
-                      <span>{fmtNumber(messageCount)} messages</span>
-                    </div>
-                  </div>
-                  <div className="review-row-actions">
-                    <button className="ghost-btn" type="button" onClick={() => setSelectedSessionId(session.id)}>选中</button>
-                    <button className="primary-btn" type="button" onClick={() => setDetailSession(session)}>详细信息</button>
-                  </div>
-                </article>
-              )
-            })}
-          </div>
-        ) : <Empty text="后端返回空 Agent 会话列表" />}
-      </Card>
-
-      {selectedSession ? (
-        <div className="agent-collapsibles">
-          <CollapsibleSection
-            title="二次任务与待补证据"
-            count={followUps.length}
-            hint="展示 verifier 或 specialist 生成的后续动作"
-          >
-            {followUps.length ? (
-              <div className="cards-list">
-                {followUps.map((item) => (
-                  <div className="item-card" key={item.id} style={{ '--accent': item.resolved ? 'var(--color-green)' : 'var(--color-orange)' } as React.CSSProperties}>
-                    <div className="meta"><Badge text={item.agent_name} tone="blue" /><Badge text={item.message_type} tone={messageTone(item.message_type)} /></div>
-                    <p><strong>{item.task}</strong></p>
-                    <div className="meta"><span>目标</span><strong>{item.recipient || '-'}</strong></div>
-                    <div className="meta"><span>动作</span><strong>{JSON.stringify(item.follow_up_action || {})}</strong></div>
-                  </div>
-                ))}
+        <div className="workflow-split">
+          <div className="session-rail">
+            <div className="session-rail-head">
+              <span>会话</span>
+              <small>{fmtNumber(sessions.length)}</small>
+            </div>
+            {sessions.length ? (
+              <div className="session-rail-list">
+                {sessions.map((session) => {
+                  const messageCount = session.runs.reduce((total, run) => total + run.messages.length, 0)
+                  const isActive = selectedSession?.id === session.id
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      className={`session-rail-item${isActive ? ' active' : ''}`}
+                      onClick={() => setSelectedSessionId(session.id)}
+                    >
+                      <div className="session-rail-top">
+                        <Badge text={session.id.slice(0, 8)} tone="blue" />
+                        <Badge text={session.status} tone={statusTone(session.status)} />
+                      </div>
+                      <p>{session.message}</p>
+                      <div className="session-rail-meta">
+                        <span>{fmtDate(session.created_at)}</span>
+                        <span>{fmtNumber(messageCount)} msg</span>
+                        <span>{fmtNumber(session.tool_calls.length)} tools</span>
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
-            ) : <Empty text="当前会话没有待补证据或二次任务" />}
-          </CollapsibleSection>
+            ) : <Empty text="暂无历史会话，发送消息后此处会出现记录" />}
+          </div>
 
-          <CollapsibleSection
-            title="消息流"
-            count={selectedMessages.length}
-            hint="完整展示角色消息、verification 和 summary"
-          >
-            <MessageFlow messages={selectedMessages} onOpenDetail={setDetailMessage} />
-          </CollapsibleSection>
-
-          <CollapsibleSection
-            title="长期记忆"
-            count={memory.length}
-            hint="展示当前数据集或全局范围内的角色记忆"
-          >
-            <MemoryList memory={memory} onOpenDetail={setDetailMemory} />
-          </CollapsibleSection>
+          <div className="workflow-canvas-area">
+            {selectedSession ? (
+              <>
+                <div className="workflow-canvas-head">
+                  <div className="workflow-canvas-title">
+                    <Badge text={selectedSession.id.slice(0, 8)} tone="blue" />
+                    <Badge text={selectedSession.status} tone={statusTone(selectedSession.status)} />
+                    <Badge text={selectedSession.runs.some((run) => run.llm_used) ? 'LLM' : 'local'} tone="purple" />
+                    <span>{selectedSession.message}</span>
+                  </div>
+                  <div className="workflow-canvas-actions">
+                    <button className="ghost-btn" type="button" onClick={() => loadSessionIntoChat(selectedSession)}>载入对话</button>
+                    <button className="primary-btn" type="button" onClick={() => setDetailSession(selectedSession)}>详细信息</button>
+                  </div>
+                </div>
+                <TaskGraphCanvas session={selectedSession} onSelectTask={setDetailTask} />
+              </>
+            ) : (
+              <div className="task-canvas task-canvas-empty">
+                <Empty text="选择左侧会话或发起一次对话后，画布将渲染对应任务图" />
+              </div>
+            )}
+          </div>
         </div>
-      ) : null}
+
+        {selectedSession ? (
+          <div className="workflow-collapsibles">
+            <CollapsibleSection
+              title="二次任务与待补证据"
+              count={followUps.length}
+              hint="展示 verifier 或 specialist 生成的后续动作"
+            >
+              {followUps.length ? (
+                <div className="cards-list">
+                  {followUps.map((item) => (
+                    <div className="item-card" key={item.id} style={{ '--accent': item.resolved ? 'var(--color-green)' : 'var(--color-orange)' } as React.CSSProperties}>
+                      <div className="meta"><Badge text={item.agent_name} tone="blue" /><Badge text={item.message_type} tone={messageTone(item.message_type)} /></div>
+                      <p><strong>{item.task}</strong></p>
+                      <div className="meta"><span>目标</span><strong>{item.recipient || '-'}</strong></div>
+                      <div className="meta"><span>动作</span><strong>{JSON.stringify(item.follow_up_action || {})}</strong></div>
+                    </div>
+                  ))}
+                </div>
+              ) : <Empty text="当前会话没有待补证据或二次任务" />}
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="消息流"
+              count={selectedMessages.length}
+              hint="完整展示角色消息、verification 和 summary"
+            >
+              <MessageFlow messages={selectedMessages} onOpenDetail={setDetailMessage} />
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="长期记忆"
+              count={memory.length}
+              hint="展示当前数据集或全局范围内的角色记忆"
+            >
+              <MemoryList memory={memory} onOpenDetail={setDetailMemory} />
+            </CollapsibleSection>
+          </div>
+        ) : null}
+      </Card>
 
       {detailSession ? (
         <DetailModal
