@@ -60,6 +60,7 @@ class VulnerabilityValidateRequest(BaseModel):
     target_id: str
     method: Literal["GET", "HEAD", "OPTIONS"] = "HEAD"
     path: str | None = Field(default=None, max_length=512)
+    probe: Literal["none", "safe_marker"] = "none"
     requested_by: str | None = Field(default=None, max_length=128)
 
     @field_validator("path")

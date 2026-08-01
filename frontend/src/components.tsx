@@ -153,6 +153,15 @@ export function JsonBlock({ value }: { value: unknown }) {
   return <pre>{JSON.stringify(value ?? {}, null, 2)}</pre>
 }
 
+export function MarkdownCode({ children, language = 'text' }: { children: string; language?: string }) {
+  return (
+    <div className="event-markdown-code">
+      <span>{language}</span>
+      <pre><code>{children || '—'}</code></pre>
+    </div>
+  )
+}
+
 export function DetailModal({
   title,
   subtitle,

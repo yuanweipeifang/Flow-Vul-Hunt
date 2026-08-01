@@ -4,6 +4,7 @@ import hashlib
 import re
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 from sqlalchemy.orm import Session
@@ -38,16 +39,22 @@ def target_allows_path(target: AuthorizedTarget, path: str) -> bool:
     return candidate == scope.rstrip("/") or candidate.startswith(scope.rstrip("/") + "/") or scope == "/"
 
 
-def _url(target: AuthorizedTarget, path: str) -> str:
+def _url(target: AuthorizedTarget, path: str, probe: str = "none", marker: str | None = None) -> str:
     port = "" if target.port in {None, default_port(target.scheme)} else f":{target.port}"
-    return f"{target.scheme}://{target.host}{port}{normalize_path(path).split('?', 1)[0]}"
+    parsed = urlsplit(normalize_path(path))
+    # Preserve the existing policy: never replay arbitrary user/event query values.
+    query: list[tuple[str, str]] = []
+    if probe == "safe_marker" and marker:
+        query.append(("__fvh_probe", marker))
+    request_path = urlunsplit(("", "", parsed.path or "/", urlencode(query), ""))
+    return f"{target.scheme}://{target.host}{port}{request_path}"
 
 
 def _redact(value: str) -> str:
     return SENSITIVE_VALUE.sub(lambda match: f"{match.group(1)}=[REDACTED]", value)
 
 
-def _response_summary(response: httpx.Response) -> dict:
+def _response_summary(response: httpx.Response, marker: str | None = None) -> dict:
     text = response.text if response.request.method == "GET" else ""
     preview = _redact(text[:300]) if text else None
     return {
@@ -60,6 +67,8 @@ def _response_summary(response: httpx.Response) -> dict:
         "body_preview": preview,
         "body_sha256": hashlib.sha256(response.content).hexdigest() if response.content else None,
         "body_size": len(response.content or b""),
+        "safe_marker": marker,
+        "safe_marker_reflected": bool(marker and marker in text),
     }
 
 
@@ -80,6 +89,7 @@ def create_validation_run(
     method: str,
     path: str | None,
     requested_by: str | None,
+    probe: str = "none",
 ) -> ValidationRun:
     method = method.upper()
     if method not in SAFE_METHODS:
@@ -90,7 +100,7 @@ def create_validation_run(
         target_id=target.id,
         status="queued",
         requested_by=requested_by,
-        request_options={"method": method, "path": requested_path},
+        request_options={"method": method, "path": requested_path, "probe": probe},
     )
     db.add(run)
     db.flush()
@@ -107,7 +117,9 @@ def execute_validation_run(
 ) -> None:
     method = run.request_options.get("method", "HEAD").upper()
     path = normalize_path(run.request_options.get("path"))
-    url = _url(target, path)
+    probe = run.request_options.get("probe", "none")
+    marker = f"flow-vul-hunt-{vulnerability.id[:8]}" if probe == "safe_marker" else None
+    url = _url(target, path, probe, marker)
     started = time.monotonic()
     run.status = "running"
     run.started_at = _now()
@@ -121,6 +133,8 @@ def execute_validation_run(
         "path": path,
         "path_scope": target.path_scope,
         "original_payload_replayed": False,
+        "probe": probe,
+        "probe_marker": marker,
     }
 
     if not target.enabled:
@@ -143,7 +157,7 @@ def execute_validation_run(
             status="completed",
             conclusion=conclusion,
             request_summary=request_summary,
-            response_summary=_response_summary(response),
+            response_summary=_response_summary(response, marker),
             latency_ms=latency_ms,
         )
         run.status = "completed"

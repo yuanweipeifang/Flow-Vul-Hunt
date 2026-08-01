@@ -16,6 +16,19 @@ export interface DatasetOut {
   updated_at: string
 }
 
+export interface AuthorizedTargetOut {
+  id: string
+  name: string
+  scheme: string
+  host: string
+  port: number | null
+  path_scope: string
+  enabled: boolean
+  note: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface StoredCsvFileOut {
   filename: string
   storage_path: string
@@ -130,6 +143,17 @@ export interface IncidentOut {
   created_at: string
   updated_at: string
   event_links: Array<{ event_id: string; relation_type: string; evidence: JsonObject; sort_order: number }>
+}
+
+export interface IncidentReportOut {
+  id: string
+  incident_id: string
+  generator: string
+  model_name: string | null
+  content: JsonObject
+  status: string
+  error_message: string | null
+  created_at: string
 }
 
 export interface JobOut {

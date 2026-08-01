@@ -29,40 +29,67 @@ type ActivityRange = 'day' | 'week' | 'month'
 const activityRanges: Record<ActivityRange, { label: string; primary: number[]; secondary: number[]; ticks: string[] }> = {
   day: {
     label: '日',
-    primary: [12, 18, 27, 46, 32, 21, 16],
-    secondary: [18, 22, 25, 31, 28, 24, 20],
+    primary: [1, 1, 2, 5, 4, 3, 2],
+    secondary: [3, 2, 6, 15, 12, 9, 5],
     ticks: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '现在'],
   },
   week: {
     label: '周',
-    primary: [34, 48, 41, 62, 55, 73, 59],
-    secondary: [46, 52, 57, 49, 64, 69, 66],
+    primary: [5, 7, 6, 10, 12, 8, 4],
+    secondary: [19, 24, 21, 31, 36, 27, 17],
     ticks: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
   },
   month: {
     label: '月',
-    primary: [86, 104, 97, 132, 118, 149, 127],
-    secondary: [112, 126, 138, 121, 154, 168, 159],
+    primary: [18, 23, 21, 31, 37, 29, 25],
+    secondary: [76, 94, 88, 117, 132, 111, 101],
     ticks: ['1日', '5日', '10日', '15日', '20日', '25日', '30日'],
   },
 }
 const agentLooks = [
-  { match: 'coordinator', icon: '◎', label: 'CO', tone: 'cyan', role: '调度' },
-  { match: 'triage', icon: '◇', label: 'TR', tone: 'orange', role: '分诊' },
-  { match: 'evidence', icon: '✓', label: 'EV', tone: 'green', role: '证据' },
-  { match: 'hunt', icon: '⌕', label: 'HU', tone: 'purple', role: '狩猎' },
-  { match: 'planner', icon: '▦', label: 'PL', tone: 'blue', role: '规划' },
-  { match: 'verifier', icon: '✓', label: 'VE', tone: 'green', role: '验证' },
+  { match: 'coordinator', icon: 'hub', label: 'CO', tone: 'cyan', role: '调度', task: '编排任务' },
+  { match: 'triage', icon: 'funnel', label: 'TR', tone: 'orange', role: '分诊', task: '筛选风险' },
+  { match: 'evidence', icon: 'evidence', label: 'EV', tone: 'green', role: '证据', task: '提取证据' },
+  { match: 'hunt', icon: 'radar', label: 'HU', tone: 'purple', role: '狩猎', task: '搜索攻击' },
+  { match: 'planner', icon: 'plan', label: 'PL', tone: 'blue', role: '规划', task: '生成路径' },
+  { match: 'verifier', icon: 'shield', label: 'VE', tone: 'green', role: '验证', task: '核验结论' },
 ]
 
 function getAgentLook(agent: string, index: number) {
   const normalized = agent.toLowerCase()
   return agentLooks.find((look) => normalized.includes(look.match)) || {
-    icon: '◈',
+    icon: 'network',
     label: agent.slice(0, 2).toUpperCase(),
     tone: ['cyan', 'orange', 'green', 'purple', 'blue'][index % 5],
     role: '协同',
+    task: '协同处理',
   }
+}
+function AgentIcon({ name, label }: { name: string; label: string }) {
+  let glyph: React.ReactNode
+  switch (name) {
+    case 'hub':
+      glyph = <><circle cx="12" cy="12" r="3" /><circle cx="5" cy="6" r="1.8" /><circle cx="19" cy="6" r="1.8" /><circle cx="6" cy="19" r="1.8" /><path d="m7 7.5 3 2.4m4 0 3-2.4m-7 7-3 2.5m7-2.5 3 2.5" /></>
+      break
+    case 'funnel':
+      glyph = <><path d="M4 5h16l-6.2 7.1v5.1l-3.6 1.8v-6.9z" /><path d="M8 8h8M9.5 11h5" /></>
+      break
+    case 'evidence':
+      glyph = <><path d="M7 3.8h7l3 3V20H7z" /><path d="M14 3.8v3h3M9.5 12.5l1.8 1.8 3.6-4" /><path d="M9.5 17h5" /></>
+      break
+    case 'radar':
+      glyph = <><circle cx="12" cy="12" r="7.5" /><circle cx="12" cy="12" r="3" /><path d="M12 12 17.5 6.5M12 3v2M3 12h2M12 19v2M19 12h2" /></>
+      break
+    case 'plan':
+      glyph = <><path d="M5 5h4v4H5zM15 15h4v4h-4zM15 5h4v4h-4z" /><path d="M9 7h6M17 9v6M15 17H9V9" /><circle cx="7" cy="17" r="2" /></>
+      break
+    case 'shield':
+      glyph = <><path d="M12 3 19 6v5.2c0 4.2-2.9 7.9-7 9.8-4.1-1.9-7-5.6-7-9.8V6z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></>
+      break
+    default:
+      glyph = <><circle cx="6" cy="12" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="18" cy="18" r="2" /><path d="m8 11 8-4m-8 6 8 4" /></>
+  }
+  return <svg className="agent-svg" viewBox="0 0 24 24" role="img" aria-label={`${label} ${name}`}><title>{label} 工作图标</title>{glyph}</svg>
 }
 function hasPositiveValues(data: Record<string, number> | undefined) {
   return Object.values(data || {}).some((value) => Number(value) > 0)
@@ -139,10 +166,10 @@ function AreaChart({ primary, secondary, maxValue }: { primary: number[]; second
       <polyline className="activity-line risk" points={primaryStr} />
       <polyline className="activity-line event" points={secondaryStr} />
       {primaryPts.map((point, index) => (
-        <circle className="chart-point risk" cx={point.x} cy={point.y} r="1.25" key={`risk-${index}`} />
+        <circle className="chart-point risk" cx={point.x} cy={point.y} r=".7" key={`risk-${index}`} />
       ))}
       {secondaryPts.map((point, index) => (
-        <circle className="chart-point event" cx={point.x} cy={point.y} r="1.25" key={`event-${index}`} />
+        <circle className="chart-point event" cx={point.x} cy={point.y} r=".7" key={`event-${index}`} />
       ))}
     </svg>
   )
@@ -221,6 +248,10 @@ function AgentSandbox({ routes, health }: { routes: Record<string, string[]>; he
     <div className="agent-sandbox">
       <div className="sandbox-stage">
         <div className="sandbox-particle-field" />
+        <div className="sandbox-depth-grid" />
+        <div className="sandbox-orbit orbit-one" />
+        <div className="sandbox-orbit orbit-two" />
+        <div className="sandbox-energy-beam" />
         <div className="sandbox-scanline" />
         <div className="sandbox-link layer-1" />
         <div className="sandbox-link layer-2" />
@@ -229,6 +260,7 @@ function AgentSandbox({ routes, health }: { routes: Record<string, string[]>; he
         <div className="sandbox-packet packet-2" />
         <div className="sandbox-packet packet-3" />
         <div className="sandbox-core">
+          <span className="sandbox-core-mark" aria-hidden="true"><AgentIcon name="hub" label="核心" /></span>
           <span className={`status-dot ${healthy ? '' : 'warn'}`} />
           <strong>Agent 沙盘</strong>
           <small>{healthy ? 'orchestrating' : 'degraded'}</small>
@@ -238,12 +270,12 @@ function AgentSandbox({ routes, health }: { routes: Record<string, string[]>; he
           const toolNames = routes[agent] || []
           return (
             <div className={`sandbox-agent node-${index + 1} tone-${look.tone}`} key={agent}>
-              <div className="agent-icon" aria-hidden="true">{look.icon}</div>
+              <div className="agent-icon"><AgentIcon name={look.icon} label={look.role} /></div>
               <div className="agent-node-text">
                 <strong>{look.label}</strong>
                 <span>{agent.replace(/_/g, ' ')}</span>
               </div>
-              <small>{look.role} · {fmtNumber(toolNames.length)} tools</small>
+              <small>{look.task} · {fmtNumber(toolNames.length)} tools</small>
             </div>
           )
         })}

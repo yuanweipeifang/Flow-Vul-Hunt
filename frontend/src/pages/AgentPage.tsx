@@ -7,6 +7,7 @@ import {
   type AgentMessageOut,
   type AgentSessionOut,
   type AgentStatusOut,
+  type AgentTaskSpecOut,
   type ProvidersOut,
 } from '../api'
 import { Badge, Card, DetailModal, Empty, ErrorBox, JsonBlock, Loading, PageHeader } from '../components'
@@ -29,6 +30,53 @@ interface ChatMessage {
   result?: AgentChatResult
 }
 
+const agentLooks = [
+  { match: 'coordinator', icon: 'hub', label: 'CO', tone: 'cyan', role: '调度', task: '编排任务' },
+  { match: 'triage', icon: 'funnel', label: 'TR', tone: 'orange', role: '分诊', task: '筛选风险' },
+  { match: 'evidence', icon: 'evidence', label: 'EV', tone: 'green', role: '证据', task: '提取证据' },
+  { match: 'hunt', icon: 'radar', label: 'HU', tone: 'purple', role: '狩猎', task: '搜索攻击' },
+  { match: 'planner', icon: 'plan', label: 'PL', tone: 'blue', role: '规划', task: '生成路径' },
+  { match: 'verifier', icon: 'shield', label: 'VE', tone: 'green', role: '验证', task: '核验结论' },
+]
+
+function getAgentLook(agent: string, index: number) {
+  const normalized = agent.toLowerCase()
+  return agentLooks.find((look) => normalized.includes(look.match)) || {
+    icon: 'network',
+    label: agent.slice(0, 2).toUpperCase(),
+    tone: ['cyan', 'orange', 'green', 'purple', 'blue'][index % 5],
+    role: '协同',
+    task: '协同处理',
+  }
+}
+
+function AgentIcon({ name, label }: { name: string; label: string }) {
+  let glyph: React.ReactNode
+  switch (name) {
+    case 'hub':
+      glyph = <><circle cx="12" cy="12" r="3" /><circle cx="5" cy="6" r="1.8" /><circle cx="19" cy="6" r="1.8" /><circle cx="6" cy="19" r="1.8" /><path d="m7 7.5 3 2.4m4 0 3-2.4m-7 7-3 2.5m7-2.5 3 2.5" /></>
+      break
+    case 'funnel':
+      glyph = <><path d="M4 5h16l-6.2 7.1v5.1l-3.6 1.8v-6.9z" /><path d="M8 8h8M9.5 11h5" /></>
+      break
+    case 'evidence':
+      glyph = <><path d="M7 3.8h7l3 3V20H7z" /><path d="M14 3.8v3h3M9.5 12.5l1.8 1.8 3.6-4" /><path d="M9.5 17h5" /></>
+      break
+    case 'radar':
+      glyph = <><circle cx="12" cy="12" r="7.5" /><circle cx="12" cy="12" r="3" /><path d="M12 12 17.5 6.5M12 3v2M3 12h2M12 19v2M19 12h2" /></>
+      break
+    case 'plan':
+      glyph = <><path d="M5 5h4v4H5zM15 15h4v4h-4zM15 5h4v4h-4z" /><path d="M9 7h6M17 9v6M15 17H9V9" /><circle cx="7" cy="17" r="2" /></>
+      break
+    case 'shield':
+      glyph = <><path d="M12 3 19 6v5.2c0 4.2-2.9 7.9-7 9.8-4.1-1.9-7-5.6-7-9.8V6z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></>
+      break
+    default:
+      glyph = <><circle cx="6" cy="12" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="18" cy="18" r="2" /><path d="m8 11 8-4m-8 6 8 4" /></>
+  }
+  return <svg className="agent-svg" viewBox="0 0 24 24" role="img" aria-label={`${label} ${name}`}><title>{label} 工作图标</title>{glyph}</svg>
+}
+
 function messageTone(messageType: string): string {
   if (messageType === 'task') return 'blue'
   if (messageType === 'verification') return 'orange'
@@ -36,34 +84,188 @@ function messageTone(messageType: string): string {
   return 'green'
 }
 
-function TaskGraph({ session }: { session: AgentSessionOut }) {
+interface TaskPosition {
+  x: number
+  y: number
+  task: AgentTaskSpecOut
+}
+
+const STATUS_LEGEND = [
+  { tone: 'cyan', label: 'running' },
+  { tone: 'green', label: 'completed' },
+  { tone: 'orange', label: 'queued' },
+  { tone: 'red', label: 'failed' },
+]
+
+function TaskGraphCanvas({
+  session,
+  onSelectTask,
+}: {
+  session: AgentSessionOut
+  onSelectTask: (task: AgentTaskSpecOut) => void
+}) {
   const tasks = session.task_graph || []
-  if (!tasks.length) return <Empty text="后端返回空任务图" />
+
+  const { layers, positions, edges } = useMemo(() => {
+    const depthMap = new Map<string, number>()
+    const visiting = new Set<string>()
+    const resolve = (taskId: string): number => {
+      if (depthMap.has(taskId)) return depthMap.get(taskId)!
+      if (visiting.has(taskId)) return 0
+      visiting.add(taskId)
+      const task = tasks.find((t) => t.task_id === taskId)
+      if (!task || !task.depends_on.length) {
+        depthMap.set(taskId, 0)
+        return 0
+      }
+      const depth = 1 + Math.max(...task.depends_on.map((d) => resolve(d)))
+      depthMap.set(taskId, depth)
+      return depth
+    }
+    tasks.forEach((t) => resolve(t.task_id))
+
+    const grouped: AgentTaskSpecOut[][] = []
+    tasks.forEach((t) => {
+      const d = depthMap.get(t.task_id) || 0
+      while (grouped.length <= d) grouped.push([])
+      grouped[d].push(t)
+    })
+    grouped.forEach((layer) => layer.sort((a, b) => b.priority - a.priority))
+
+    const pos = new Map<string, TaskPosition>()
+    const layerCount = grouped.length || 1
+    grouped.forEach((layerTasks, depth) => {
+      const yPercent = layerCount === 1 ? 50 : ((depth + 0.5) / layerCount) * 100
+      const widthPerTask = 100 / Math.max(layerTasks.length, 1)
+      layerTasks.forEach((task, i) => {
+        const xPercent = widthPerTask * (i + 0.5)
+        pos.set(task.task_id, { x: xPercent, y: yPercent, task })
+      })
+    })
+
+    const e: { from: TaskPosition; to: TaskPosition }[] = []
+    tasks.forEach((t) => {
+      const to = pos.get(t.task_id)
+      if (!to) return
+      t.depends_on.forEach((depId) => {
+        const from = pos.get(depId)
+        if (from) e.push({ from, to })
+      })
+    })
+    return { layers: grouped, positions: pos, edges: e }
+  }, [tasks])
+
+  if (!tasks.length) {
+    return (
+      <div className="task-canvas task-canvas-empty">
+        <Empty text="后端返回空任务图，等待 Agent 启动后渲染工作流" />
+      </div>
+    )
+  }
+
   return (
-    <div className="cards-list">
-      {[...tasks].sort((left, right) => right.priority - left.priority).map((task) => (
-        <div
-          className="item-card"
-          key={task.task_id}
-          style={{
-            '--accent': task.status === 'failed'
-              ? 'var(--color-red)'
-              : task.requires_confirmation
-                ? 'var(--color-orange)'
-                : 'var(--color-cyan)',
-          } as React.CSSProperties}
-        >
-          <div className="meta">
-            <Badge text={task.agent_name} tone="blue" />
-            <Badge text={task.status || 'pending'} tone={statusTone(task.status || 'pending')} />
-            <Badge text={`P${task.priority}`} tone="purple" />
-            {task.requires_confirmation ? <Badge text="需要确认" tone="orange" /> : null}
+    <div className="task-canvas" style={{ minHeight: Math.max(460, layers.length * 140) }}>
+      <div className="task-canvas-grid" aria-hidden="true" />
+      <svg className="task-canvas-edges" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {edges.map(({ from, to }, i) => (
+          <path
+            key={`edge-${i}`}
+            className={`task-edge ${to.task.status === 'failed' ? 'failed' : ''}`}
+            d={`M ${from.x} ${from.y} C ${from.x} ${(from.y + to.y) / 2}, ${to.x} ${(from.y + to.y) / 2}, ${to.x} ${to.y}`}
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+      </svg>
+      {Array.from(positions.values()).map(({ x, y, task }) => {
+        const look = getAgentLook(task.agent_name, 0)
+        const statusKey = (task.status || 'pending').toLowerCase()
+        return (
+          <button
+            key={task.task_id}
+            type="button"
+            className={`task-node tone-${look.tone} status-${statusKey}`}
+            style={{ left: `${x}%`, top: `${y}%` }}
+            onClick={() => onSelectTask(task)}
+            title={task.goal}
+          >
+            <div className="task-node-icon">
+              <AgentIcon name={look.icon} label={look.role} />
+            </div>
+            <div className="task-node-content">
+              <div className="task-node-head">
+                <strong>{look.label}</strong>
+                <span className="task-node-role">{look.role} · {task.agent_name}</span>
+              </div>
+              <p className="task-node-goal">{task.goal}</p>
+              <div className="task-node-meta">
+                <Badge text={task.status || 'pending'} tone={statusTone(task.status || 'pending')} />
+                {task.requires_confirmation ? <Badge text="需确认" tone="orange" /> : null}
+              </div>
+            </div>
+          </button>
+        )
+      })}
+      <div className="task-canvas-legend" aria-hidden="true">
+        {STATUS_LEGEND.map((item) => (
+          <span key={item.label} style={{ '--swatch': `var(--color-${item.tone})` } as React.CSSProperties}>
+            <i />
+            {item.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function TaskDetail({ task }: { task: AgentTaskSpecOut }) {
+  return (
+    <div className="detail-stack">
+      <div className="detail-summary-grid">
+        <div><span>任务 ID</span><strong>{task.task_id}</strong></div>
+        <div><span>Agent</span><strong>{task.agent_name}</strong></div>
+        <div><span>状态</span><strong>{task.status || 'pending'}</strong></div>
+        <div><span>优先级</span><strong>P{task.priority}</strong></div>
+        <div><span>需要确认</span><strong>{task.requires_confirmation ? '是' : '否'}</strong></div>
+        <div><span>依赖任务</span><strong>{task.depends_on.join(', ') || '无'}</strong></div>
+      </div>
+      <div className="detail-callout">
+        <Badge text={task.status || 'pending'} tone={statusTone(task.status || 'pending')} />
+        <Badge text={`P${task.priority}`} tone="purple" />
+        {task.requires_confirmation ? <Badge text="需要确认" tone="orange" /> : null}
+        <Badge text={task.agent_name} tone="blue" />
+      </div>
+      <section className="detail-section">
+        <h3>任务目标</h3>
+        <p>{task.goal}</p>
+      </section>
+      <section className="detail-section">
+        <h3>工具列表</h3>
+        {task.tool_names.length ? (
+          <div className="detail-mini-list">
+            {task.tool_names.map((name) => (
+              <div className="detail-mini-item" key={name}>
+                <div><strong>{name}</strong></div>
+              </div>
+            ))}
           </div>
-          <p><strong>{task.goal}</strong></p>
-          <div className="meta"><span>工具</span><strong>{task.tool_names.join(', ') || '-'}</strong></div>
-          <div className="meta"><span>依赖</span><strong>{task.depends_on.join(', ') || '-'}</strong></div>
-        </div>
-      ))}
+        ) : <Empty text="该任务没有声明工具" />}
+      </section>
+      <section className="detail-section">
+        <h3>依赖关系</h3>
+        {task.depends_on.length ? (
+          <div className="detail-mini-list">
+            {task.depends_on.map((dep) => (
+              <div className="detail-mini-item" key={dep}>
+                <div><strong>{dep}</strong><span>前置任务</span></div>
+              </div>
+            ))}
+          </div>
+        ) : <Empty text="无前置依赖，可立即执行" />}
+      </section>
+      <section className="detail-section">
+        <h3>原始任务对象</h3>
+        <JsonBlock value={task} />
+      </section>
     </div>
   )
 }
@@ -246,23 +448,6 @@ function AgentSessionDetail({ session }: { session: AgentSessionOut }) {
       </section>
 
       <section className="detail-section">
-        <h3>任务图</h3>
-        {session.task_graph.length ? (
-          <div className="detail-mini-list">
-            {session.task_graph.map((task) => (
-              <div className="detail-mini-item" key={task.task_id}>
-                <div>
-                  <strong>{task.goal}</strong>
-                  <span>{task.task_id} · {task.agent_name} · priority {task.priority}</span>
-                </div>
-                <Badge text={task.status} tone={statusTone(task.status)} />
-              </div>
-            ))}
-          </div>
-        ) : <Empty text="没有任务图" />}
-      </section>
-
-      <section className="detail-section">
         <h3>工具调用</h3>
         {session.tool_calls.length ? (
           <div className="detail-mini-list">
@@ -280,7 +465,7 @@ function AgentSessionDetail({ session }: { session: AgentSessionOut }) {
       </section>
 
       <section className="detail-section">
-        <h3>协作消息</h3>
+        <h3>协作消息摘要</h3>
         {messages.length ? (
           <div className="detail-mini-list">
             {messages.map((item) => (
@@ -306,6 +491,31 @@ function AgentSessionDetail({ session }: { session: AgentSessionOut }) {
   )
 }
 
+function CollapsibleSection({
+  title,
+  count,
+  hint,
+  children,
+  defaultOpen = false,
+}: {
+  title: string
+  count?: number
+  hint?: string
+  children: React.ReactNode
+  defaultOpen?: boolean
+}) {
+  return (
+    <details className="collapsible-section" open={defaultOpen}>
+      <summary>
+        <span className="collapsible-summary-title">{title}</span>
+        {hint ? <span className="collapsible-summary-hint">{hint}</span> : null}
+        {count !== undefined ? <span className="collapsible-summary-count">{fmtNumber(count)}</span> : null}
+      </summary>
+      <div className="collapsible-body">{children}</div>
+    </details>
+  )
+}
+
 export function AgentPage({ context }: { context: AppContextValue }) {
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
@@ -316,6 +526,7 @@ export function AgentPage({ context }: { context: AppContextValue }) {
   const [detailSession, setDetailSession] = useState<AgentSessionOut | null>(null)
   const [detailMessage, setDetailMessage] = useState<AgentMessageOut | null>(null)
   const [detailMemory, setDetailMemory] = useState<AgentMemoryOut | null>(null)
+  const [detailTask, setDetailTask] = useState<AgentTaskSpecOut | null>(null)
 
   const { data, error, loading } = useApiData<AgentBundle>(async () => {
     const [statusResult, providersResult, sessionsResult, memoryResult] = await Promise.allSettled([
@@ -402,7 +613,7 @@ export function AgentPage({ context }: { context: AppContextValue }) {
 
   return (
     <>
-      <PageHeader title="Agent 会话" description="直接和在线 LLM Agent 对话，同时保留多 Agent 任务图、消息流、记忆和后续动作观测。">
+      <PageHeader title="Agent 会话" description="以工作流画布为核心，可视化各 Agent 任务与依赖；消息流、长期记忆按需展开。">
         <label className="field">
           <span>数据集</span>
           <select value={context.selectedDataset} onChange={(event) => context.setSelectedDataset(event.target.value)}>
@@ -530,13 +741,27 @@ export function AgentPage({ context }: { context: AppContextValue }) {
         </aside>
       </div>
 
-      <Card title="Agent 会话" description="按时间倒序展示对话、执行状态和协作证据，点击详细信息查看完整上下文。">
+      <Card
+        title={`工作流画布${selectedSession ? ` · ${selectedSession.id.slice(0, 8)}` : ''}`}
+        description="按依赖深度分层渲染任务节点，点击任意节点查看任务详情。无任务时画布展示空状态。"
+      >
+        {selectedSession ? (
+          <TaskGraphCanvas session={selectedSession} onSelectTask={setDetailTask} />
+        ) : (
+          <div className="task-canvas task-canvas-empty">
+            <Empty text="选择或发起一次会话后，画布将渲染对应任务图" />
+          </div>
+        )}
+      </Card>
+
+      <Card title="Agent 会话" description="按时间倒序展示历史会话，点击「选中」加载到画布与折叠面板，点击「详细信息」查看完整上下文。">
         {sessions.length ? (
           <div className="review-list">
             {sessions.map((session) => {
               const messageCount = session.runs.reduce((total, run) => total + run.messages.length, 0)
+              const isActive = selectedSession?.id === session.id
               return (
-                <article className="review-row" key={session.id}>
+                <article className="review-row" key={session.id} style={isActive ? { borderColor: 'rgba(52, 252, 255, .55)' } : undefined}>
                   <div className="review-row-main">
                     <div className="review-row-top">
                       <Badge text={session.id.slice(0, 8)} tone="blue" />
@@ -564,35 +789,42 @@ export function AgentPage({ context }: { context: AppContextValue }) {
       </Card>
 
       {selectedSession ? (
-        <>
-          <div className="grid two">
-            <Card title={`任务图 · ${selectedSession.id.slice(0, 8)}`} description="按优先级展示角色任务与依赖关系。">
-              <TaskGraph session={selectedSession} />
-            </Card>
-            <Card title="二次任务与待补证据" description="展示 verifier 或 specialist 生成的后续动作。">
-              {followUps.length ? (
-                <div className="cards-list">
-                  {followUps.map((item) => (
-                    <div className="item-card" key={item.id} style={{ '--accent': item.resolved ? 'var(--color-green)' : 'var(--color-orange)' } as React.CSSProperties}>
-                      <div className="meta"><Badge text={item.agent_name} tone="blue" /><Badge text={item.message_type} tone={messageTone(item.message_type)} /></div>
-                      <p><strong>{item.task}</strong></p>
-                      <div className="meta"><span>目标</span><strong>{item.recipient || '-'}</strong></div>
-                      <div className="meta"><span>动作</span><strong>{JSON.stringify(item.follow_up_action || {})}</strong></div>
-                    </div>
-                  ))}
-                </div>
-              ) : <Empty text="当前会话没有待补证据或二次任务" />}
-            </Card>
-          </div>
-          <div className="grid two">
-            <Card title="消息流" description="完整展示角色消息、verification 和 summary。">
-              <MessageFlow messages={selectedMessages} onOpenDetail={setDetailMessage} />
-            </Card>
-            <Card title="长期记忆" description="展示当前数据集或全局范围内的角色记忆。">
-              <MemoryList memory={memory} onOpenDetail={setDetailMemory} />
-            </Card>
-          </div>
-        </>
+        <div className="agent-collapsibles">
+          <CollapsibleSection
+            title="二次任务与待补证据"
+            count={followUps.length}
+            hint="展示 verifier 或 specialist 生成的后续动作"
+          >
+            {followUps.length ? (
+              <div className="cards-list">
+                {followUps.map((item) => (
+                  <div className="item-card" key={item.id} style={{ '--accent': item.resolved ? 'var(--color-green)' : 'var(--color-orange)' } as React.CSSProperties}>
+                    <div className="meta"><Badge text={item.agent_name} tone="blue" /><Badge text={item.message_type} tone={messageTone(item.message_type)} /></div>
+                    <p><strong>{item.task}</strong></p>
+                    <div className="meta"><span>目标</span><strong>{item.recipient || '-'}</strong></div>
+                    <div className="meta"><span>动作</span><strong>{JSON.stringify(item.follow_up_action || {})}</strong></div>
+                  </div>
+                ))}
+              </div>
+            ) : <Empty text="当前会话没有待补证据或二次任务" />}
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="消息流"
+            count={selectedMessages.length}
+            hint="完整展示角色消息、verification 和 summary"
+          >
+            <MessageFlow messages={selectedMessages} onOpenDetail={setDetailMessage} />
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="长期记忆"
+            count={memory.length}
+            hint="展示当前数据集或全局范围内的角色记忆"
+          >
+            <MemoryList memory={memory} onOpenDetail={setDetailMemory} />
+          </CollapsibleSection>
+        </div>
       ) : null}
 
       {detailSession ? (
@@ -602,6 +834,16 @@ export function AgentPage({ context }: { context: AppContextValue }) {
           onClose={() => setDetailSession(null)}
         >
           <AgentSessionDetail session={detailSession} />
+        </DetailModal>
+      ) : null}
+
+      {detailTask ? (
+        <DetailModal
+          title={detailTask.goal}
+          subtitle={`${detailTask.agent_name} · ${detailTask.status || 'pending'} · P${detailTask.priority}`}
+          onClose={() => setDetailTask(null)}
+        >
+          <TaskDetail task={detailTask} />
         </DetailModal>
       ) : null}
 

@@ -32,6 +32,7 @@ export function HuntPage({ context }: { context: AppContextValue }) {
 
   const rows = (result?.events || []).map((event) => [
     fmtNumber(event.row_number), event.host || '—', event.path || '—', <Badge text={event.verdict} tone={event.verdict === 'malicious' ? 'red' : event.verdict === 'suspicious' ? 'orange' : 'blue'} />, fmtScore(event.risk_score),
+    <a className="hunt-vulnerability-link" href={`/vulnerabilities?event_id=${encodeURIComponent(event.id)}`}>查看候选</a>,
   ])
 
   return (
@@ -53,7 +54,7 @@ export function HuntPage({ context }: { context: AppContextValue }) {
               {result.warning ? <ErrorBox error={result.warning} /> : null}
               <h3>解释过滤器</h3><JsonBlock value={result.interpreted_filters} />
             </div>
-            <div className="section"><DataTable caption="狩猎命中事件" headers={['行号','Host','Path','判定','风险']} rows={rows} /></div>
+            <div className="section"><DataTable caption="狩猎命中事件" headers={['行号','Host','Path','判定','风险','漏洞候选']} rows={rows} /></div>
           </>
         )}
       </Card>

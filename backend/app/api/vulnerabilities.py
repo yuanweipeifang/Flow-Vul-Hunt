@@ -73,6 +73,7 @@ def _analysis_summary(vulnerability: VulnerabilityCandidate) -> str:
 @router.get("", response_model=list[VulnerabilityCandidateOut])
 def list_vulnerabilities(
     dataset_id: str | None = None,
+    event_id: str | None = None,
     candidate_type: str | None = None,
     status: str | None = None,
     severity: str | None = None,
@@ -84,6 +85,8 @@ def list_vulnerabilities(
     statement = select(VulnerabilityCandidate)
     if dataset_id:
         statement = statement.where(VulnerabilityCandidate.dataset_id == dataset_id)
+    if event_id:
+        statement = statement.where(VulnerabilityCandidate.event_id == event_id)
     if candidate_type:
         statement = statement.where(VulnerabilityCandidate.candidate_type == candidate_type)
     if status:
@@ -228,6 +231,7 @@ def validate_vulnerability(
             request.method,
             request.path,
             request.requested_by,
+            probe=request.probe,
         )
     except ValidationPolicyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
