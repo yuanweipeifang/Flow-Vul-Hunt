@@ -153,6 +153,104 @@ def test_hermes_smoke_check_is_static_and_does_not_claim_live_e2e() -> None:
     assert "ready_for_live_e2e" in result
 
 
+def test_agent_debug_events_are_disabled_without_explicit_debug_server(monkeypatch) -> None:
+    from app.llm import gateway
+    from app.services.agent import sessions
+
+    calls = []
+
+    def record_urlopen(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise OSError("debug server is absent")
+
+    monkeypatch.delenv("DEBUG_SERVER_URL", raising=False)
+    monkeypatch.setattr("urllib.request.urlopen", record_urlopen)
+
+    gateway._debug_event("test", "gateway", "should stay local")
+    sessions._debug_event("test", "sessions", "should stay local")
+    assert calls == []
+
+
+def test_agent_chat_rejects_corrupted_question_mark_message(db_session) -> None:
+    settings = Settings(
+        app_name="test",
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        max_upload_bytes=1,
+        max_payload_chars=1000,
+        llm_timeout_seconds=1,
+        llm_max_retries=0,
+        llm_max_input_chars=1000,
+        providers={},
+        agent_routes={},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        run_agent_chat(
+            AgentChatRequest(message="????CSV??????????", auto_execute=True),
+            db_session,
+            BackgroundTasks(),
+            Actor("api_key:analyst", "analyst", True),
+            settings,
+        )
+
+    assert exc.value.status_code == 422
+    assert db_session.query(AgentSession).count() == 0
+
+
+def test_agent_chat_rejects_all_question_mark_corruption(db_session) -> None:
+    settings = Settings(
+        app_name="test",
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        max_upload_bytes=1,
+        max_payload_chars=1000,
+        llm_timeout_seconds=1,
+        llm_max_retries=0,
+        llm_max_input_chars=1000,
+        providers={},
+        agent_routes={},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        run_agent_chat(
+            AgentChatRequest(message="?????????", auto_execute=True),
+            db_session,
+            BackgroundTasks(),
+            Actor("api_key:analyst", "analyst", True),
+            settings,
+        )
+
+    assert exc.value.status_code == 422
+    assert db_session.query(AgentSession).count() == 0
+
+
+def test_agent_chat_allows_normal_question_marks(db_session) -> None:
+    settings = Settings(
+        app_name="test",
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        max_upload_bytes=1,
+        max_payload_chars=1000,
+        llm_timeout_seconds=1,
+        llm_max_retries=0,
+        llm_max_input_chars=1000,
+        providers={},
+        agent_routes={},
+    )
+
+    result = run_agent_chat(
+        AgentChatRequest(message="What happened???", auto_execute=True),
+        db_session,
+        BackgroundTasks(),
+        Actor("api_key:analyst", "analyst", True),
+        settings,
+    )
+
+    assert result.session_id
+    assert db_session.query(AgentSession).one().message == "What happened???"
+
+
 def test_mark_stuck_jobs_marks_timed_out_running_job(db_session) -> None:
     job = AnalysisJob(
         dataset_id="dataset-1",

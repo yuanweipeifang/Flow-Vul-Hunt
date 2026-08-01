@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.request
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ def _debug_event(hypothesis_id: str, location: str, msg: str, data: dict | None 
         "msg": f"[DEBUG] {msg}",
         "data": data or {},
     }
-    url = "http://127.0.0.1:7777/event"
+    url = os.getenv("DEBUG_SERVER_URL", "").strip()
     env_path = ".dbg/agent-chat-stall.env"
     try:
         with open(env_path, encoding="utf-8") as env_file:
@@ -32,6 +33,8 @@ def _debug_event(hypothesis_id: str, location: str, msg: str, data: dict | None 
                     url = line.split("=", 1)[1].strip() or url
     except Exception:
         pass
+    if not url:
+        return
     try:
         urllib.request.urlopen(
             urllib.request.Request(

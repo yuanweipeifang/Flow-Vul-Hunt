@@ -17,8 +17,9 @@ export function fmtScore(value: number | null | undefined) {
 
 export function severityTone(severity: string | null | undefined) {
   const value = String(severity || '').toLowerCase()
-  if (value === 'critical' || value === 'high') return 'red'
-  if (value === 'medium') return 'orange'
+  if (value === 'critical') return 'red'
+  if (value === 'high') return 'navy'
+  if (value === 'medium') return 'cyan'
   if (value === 'low' || value === 'info') return 'green'
   return 'blue'
 }

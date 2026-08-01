@@ -40,6 +40,16 @@ Schema:
 """
 
 
+def _looks_like_replacement_mojibake(text: str) -> bool:
+    compact = "".join(char for char in text.strip() if not char.isspace())
+    if len(compact) < 6 or "?" not in compact:
+        return False
+    question_ratio = compact.count("?") / len(compact)
+    if question_ratio >= 0.8:
+        return True
+    return question_ratio >= 0.6 and any(char.isalnum() for char in compact)
+
+
 def _compact_tool_calls(tool_calls: list[AgentToolCallOut]) -> list[dict[str, Any]]:
     compact = []
     for call in tool_calls:
@@ -106,6 +116,14 @@ def run_agent_chat(
     settings: Settings | None = None,
     event_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> AgentChatResult:
+    if _looks_like_replacement_mojibake(request.message):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "message appears to be corrupted by terminal encoding; use UTF-8 input "
+                "or send the request from the browser/API client"
+            ),
+        )
     settings = settings or get_settings()
     status = agent_status(settings)
     _emit_agent_event(

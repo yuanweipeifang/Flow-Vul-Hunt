@@ -3,7 +3,7 @@ import type { AppContextValue } from '../App'
 import { queryString, type EventDetail, type PaginatedEvents } from '../api'
 import { Badge, Card, DataTable, Empty, ErrorBox, JsonBlock, Loading, PageHeader } from '../components'
 import { useApiData } from '../useApiData'
-import { fmtDate, fmtNumber, fmtScore, statusTone } from '../ui'
+import { fmtDate, fmtNumber, fmtScore, severityTone, statusTone } from '../ui'
 
 function verdictTone(verdict: string) {
   if (verdict === 'malicious') return 'red'
@@ -73,7 +73,7 @@ export function EventsPage({ context }: { context: AppContextValue }) {
               <h3>Raw Payload</h3><pre>{detail.raw_payload}</pre>
               <h3>Decoded Payload</h3><pre>{detail.decoded_payload}</pre>
               <h3>检测证据</h3>
-              {detail.findings.length ? <div className="cards-list">{detail.findings.map((finding) => <div className="item-card" key={finding.id}><div className="meta"><Badge text={finding.severity} tone={finding.severity === 'high' || finding.severity === 'critical' ? 'red' : 'orange'} /><Badge text={finding.attack_type} tone="purple" /><span>置信度 {fmtScore(finding.confidence)}</span></div><h3>{finding.detector_name}</h3><p>{finding.matched_fragment || '—'}</p><JsonBlock value={finding.evidence} /></div>)}</div> : <Empty text="该事件暂无检测证据" />}
+              {detail.findings.length ? <div className="cards-list">{detail.findings.map((finding) => <div className="item-card" key={finding.id}><div className="meta"><Badge text={finding.severity} tone={severityTone(finding.severity)} /><Badge text={finding.attack_type} tone="purple" /><span>置信度 {fmtScore(finding.confidence)}</span></div><h3>{finding.detector_name}</h3><p>{finding.matched_fragment || '—'}</p><JsonBlock value={finding.evidence} /></div>)}</div> : <Empty text="该事件暂无检测证据" />}
               <h3>LLM 分析</h3>
               {detail.llm_analyses.length ? <div className="cards-list">{detail.llm_analyses.map((analysis) => <div className="item-card" key={analysis.id}><div className="meta"><Badge text={analysis.agent_name} tone="purple" /><Badge text={analysis.status} tone={statusTone(analysis.status)} /><span>{analysis.provider}</span><span>{analysis.model_name}</span></div><p>{analysis.error_message || '已完成结构化分析'}</p><JsonBlock value={analysis.structured_result} /></div>)}</div> : <Empty text="该事件暂无 LLM 分析记录" />}
             </div>

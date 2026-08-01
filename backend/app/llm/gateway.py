@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -43,7 +44,7 @@ def _debug_event(hypothesis_id: str, location: str, msg: str, data: dict[str, An
         "msg": f"[DEBUG] {msg}",
         "data": data or {},
     }
-    url = "http://127.0.0.1:7777/event"
+    url = os.getenv("DEBUG_SERVER_URL", "").strip()
     try:
         with open(".dbg/agent-chat-stall.env", encoding="utf-8") as env_file:
             for line in env_file:
@@ -51,6 +52,8 @@ def _debug_event(hypothesis_id: str, location: str, msg: str, data: dict[str, An
                     url = line.split("=", 1)[1].strip() or url
     except Exception:
         pass
+    if not url:
+        return
     try:
         urllib.request.urlopen(
             urllib.request.Request(

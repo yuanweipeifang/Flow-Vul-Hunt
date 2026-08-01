@@ -9,7 +9,7 @@ import {
   type AgentStatusOut,
   type ProvidersOut,
 } from '../api'
-import { Badge, Card, DataTable, Empty, ErrorBox, JsonBlock, Loading, PageHeader } from '../components'
+import { Badge, Card, DetailModal, Empty, ErrorBox, JsonBlock, Loading, PageHeader } from '../components'
 import { useApiData } from '../useApiData'
 import { fmtDate, fmtNumber, statusTone } from '../ui'
 
@@ -30,25 +30,18 @@ interface ChatMessage {
 }
 
 function messageTone(messageType: string): string {
-  switch (messageType) {
-    case 'task':
-      return 'blue'
-    case 'verification':
-      return 'orange'
-    case 'summary':
-      return 'purple'
-    default:
-      return 'green'
-  }
+  if (messageType === 'task') return 'blue'
+  if (messageType === 'verification') return 'orange'
+  if (messageType === 'summary') return 'purple'
+  return 'green'
 }
 
 function TaskGraph({ session }: { session: AgentSessionOut }) {
   const tasks = session.task_graph || []
   if (!tasks.length) return <Empty text="后端返回空任务图" />
-  const ordered = [...tasks].sort((left, right) => right.priority - left.priority)
   return (
     <div className="cards-list">
-      {ordered.map((task) => (
+      {[...tasks].sort((left, right) => right.priority - left.priority).map((task) => (
         <div
           className="item-card"
           key={task.task_id}
@@ -64,18 +57,94 @@ function TaskGraph({ session }: { session: AgentSessionOut }) {
             <Badge text={task.agent_name} tone="blue" />
             <Badge text={task.status || 'pending'} tone={statusTone(task.status || 'pending')} />
             <Badge text={`P${task.priority}`} tone="purple" />
-            {task.requires_confirmation ? <Badge text="需确认" tone="orange" /> : null}
+            {task.requires_confirmation ? <Badge text="需要确认" tone="orange" /> : null}
           </div>
           <p><strong>{task.goal}</strong></p>
-          <div className="meta"><span>工具</span><strong>{task.tool_names.join(', ') || '—'}</strong></div>
-          <div className="meta"><span>依赖</span><strong>{task.depends_on.join(', ') || '—'}</strong></div>
+          <div className="meta"><span>工具</span><strong>{task.tool_names.join(', ') || '-'}</strong></div>
+          <div className="meta"><span>依赖</span><strong>{task.depends_on.join(', ') || '-'}</strong></div>
         </div>
       ))}
     </div>
   )
 }
 
-function MessageFlow({ messages }: { messages: AgentMessageOut[] }) {
+function AgentMessageDetail({ message }: { message: AgentMessageOut }) {
+  return (
+    <div className="detail-stack">
+      <div className="detail-summary-grid">
+        <div><span>消息 ID</span><strong>{message.id}</strong></div>
+        <div><span>Agent</span><strong>{message.agent_name}</strong></div>
+        <div><span>角色</span><strong>{message.role}</strong></div>
+        <div><span>类型</span><strong>{message.message_type}</strong></div>
+        <div><span>状态</span><strong>{message.status}</strong></div>
+        <div><span>置信度</span><strong>{message.confidence.toFixed(2)}</strong></div>
+      </div>
+      <div className="detail-callout">
+        <Badge text={message.agent_name} tone="blue" />
+        <Badge text={message.message_type} tone={messageTone(message.message_type)} />
+        <Badge text={message.resolved ? 'resolved' : 'unresolved'} tone={message.resolved ? 'green' : 'orange'} />
+        <span>{message.created_at ? fmtDate(message.created_at) : '未记录创建时间'}</span>
+      </div>
+      <section className="detail-section">
+        <h3>任务</h3>
+        <p>{message.task}</p>
+      </section>
+      <section className="detail-section">
+        <h3>路由与依赖</h3>
+        <JsonBlock value={{ recipient: message.recipient, depends_on: message.depends_on, follow_up_action: message.follow_up_action }} />
+      </section>
+      <section className="detail-section">
+        <h3>输入摘要</h3>
+        <JsonBlock value={message.input_summary} />
+      </section>
+      <section className="detail-section">
+        <h3>输出</h3>
+        <JsonBlock value={message.output} />
+      </section>
+      <section className="detail-section">
+        <h3>证据引用</h3>
+        <JsonBlock value={message.evidence_refs} />
+      </section>
+      {message.error ? (
+        <section className="detail-section">
+          <h3>错误</h3>
+          <p>{message.error}</p>
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
+function AgentMemoryDetail({ memory }: { memory: AgentMemoryOut }) {
+  return (
+    <div className="detail-stack">
+      <div className="detail-summary-grid">
+        <div><span>记忆 ID</span><strong>{memory.id}</strong></div>
+        <div><span>数据集</span><strong>{memory.dataset_id || 'global'}</strong></div>
+        <div><span>Agent</span><strong>{memory.agent_name}</strong></div>
+        <div><span>类型</span><strong>{memory.memory_type}</strong></div>
+        <div><span>置信度</span><strong>{memory.confidence.toFixed(2)}</strong></div>
+        <div><span>更新时间</span><strong>{fmtDate(memory.updated_at)}</strong></div>
+      </div>
+      <div className="detail-callout">
+        <Badge text={memory.agent_name} tone="blue" />
+        <Badge text={memory.memory_type} tone="purple" />
+        <Badge text={memory.confidence.toFixed(2)} tone="green" />
+        <span>{fmtDate(memory.created_at)} 创建</span>
+      </div>
+      <section className="detail-section">
+        <h3>摘要</h3>
+        <p>{memory.summary}</p>
+      </section>
+      <section className="detail-section">
+        <h3>记忆内容</h3>
+        <JsonBlock value={memory.content} />
+      </section>
+    </div>
+  )
+}
+
+function MessageFlow({ messages, onOpenDetail }: { messages: AgentMessageOut[]; onOpenDetail: (message: AgentMessageOut) => void }) {
   if (!messages.length) return <Empty text="后端返回空消息流" />
   return (
     <div className="cards-list">
@@ -99,20 +168,22 @@ function MessageFlow({ messages }: { messages: AgentMessageOut[] }) {
           </div>
           <p><strong>{item.task}</strong></p>
           <div className="meta">
-            <span>接收者</span><strong>{item.recipient || '—'}</strong>
+            <span>接收者</span><strong>{item.recipient || '-'}</strong>
             <span>置信度</span><strong>{item.confidence.toFixed(2)}</strong>
           </div>
           {Object.keys(item.follow_up_action || {}).length ? (
             <div className="meta"><span>后续动作</span><strong>{JSON.stringify(item.follow_up_action)}</strong></div>
           ) : null}
-          <JsonBlock value={item.output} />
+          <div className="item-actions">
+            <button className="primary-btn" type="button" onClick={() => onOpenDetail(item)}>详细信息</button>
+          </div>
         </div>
       ))}
     </div>
   )
 }
 
-function MemoryList({ memory }: { memory: AgentMemoryOut[] }) {
+function MemoryList({ memory, onOpenDetail }: { memory: AgentMemoryOut[]; onOpenDetail: (memory: AgentMemoryOut) => void }) {
   if (!memory.length) return <Empty text="后端返回空记忆列表" />
   return (
     <div className="cards-list">
@@ -124,10 +195,113 @@ function MemoryList({ memory }: { memory: AgentMemoryOut[] }) {
             <Badge text={item.confidence.toFixed(2)} tone="green" />
           </div>
           <p><strong>{item.summary}</strong></p>
-          <JsonBlock value={item.content} />
           <div className="meta"><span>更新时间</span><strong>{fmtDate(item.updated_at)}</strong></div>
+          <div className="item-actions">
+            <button className="primary-btn" type="button" onClick={() => onOpenDetail(item)}>详细信息</button>
+          </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function AgentSessionDetail({ session }: { session: AgentSessionOut }) {
+  const messages = session.runs.flatMap((run) => run.messages)
+  const latestRun = session.runs[0] || null
+  return (
+    <div className="detail-stack">
+      <div className="detail-summary-grid">
+        <div><span>会话 ID</span><strong>{session.id}</strong></div>
+        <div><span>Actor</span><strong>{session.actor}</strong></div>
+        <div><span>角色</span><strong>{session.role}</strong></div>
+        <div><span>创建时间</span><strong>{fmtDate(session.created_at)}</strong></div>
+        <div><span>Runtime</span><strong>{session.runtime}</strong></div>
+        <div><span>Planner</span><strong>{session.planner_used}</strong></div>
+      </div>
+
+      <div className="detail-callout">
+        <Badge text={session.status} tone={statusTone(session.status)} />
+        <Badge text={session.runs.some((run) => run.llm_used) ? 'LLM' : 'local'} tone="purple" />
+        {session.requires_confirmation ? <Badge text="需要确认" tone="orange" /> : null}
+        <span>{session.warning || '当前会话已完成记录，可继续复盘任务图、工具证据与协作消息。'}</span>
+      </div>
+
+      <section className="detail-section">
+        <h3>用户问题</h3>
+        <p>{session.message}</p>
+      </section>
+
+      <section className="detail-section">
+        <h3>Agent 回答</h3>
+        <p>{session.answer}</p>
+      </section>
+
+      <section className="detail-section">
+        <h3>执行计划</h3>
+        {session.plan.length ? (
+          <ul className="detail-bullet-list">
+            {session.plan.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
+          </ul>
+        ) : <Empty text="没有执行计划" />}
+      </section>
+
+      <section className="detail-section">
+        <h3>任务图</h3>
+        {session.task_graph.length ? (
+          <div className="detail-mini-list">
+            {session.task_graph.map((task) => (
+              <div className="detail-mini-item" key={task.task_id}>
+                <div>
+                  <strong>{task.goal}</strong>
+                  <span>{task.task_id} · {task.agent_name} · priority {task.priority}</span>
+                </div>
+                <Badge text={task.status} tone={statusTone(task.status)} />
+              </div>
+            ))}
+          </div>
+        ) : <Empty text="没有任务图" />}
+      </section>
+
+      <section className="detail-section">
+        <h3>工具调用</h3>
+        {session.tool_calls.length ? (
+          <div className="detail-mini-list">
+            {session.tool_calls.map((call) => (
+              <div className="detail-mini-item" key={call.id}>
+                <div>
+                  <strong>{call.name}</strong>
+                  <span>{call.risk_level} · {call.requires_confirmation ? 'requires confirmation' : 'auto allowed'}</span>
+                </div>
+                <Badge text={call.status} tone={statusTone(call.status)} />
+              </div>
+            ))}
+          </div>
+        ) : <Empty text="没有工具调用" />}
+      </section>
+
+      <section className="detail-section">
+        <h3>协作消息</h3>
+        {messages.length ? (
+          <div className="detail-mini-list">
+            {messages.map((item) => (
+              <div className="detail-mini-item" key={item.id}>
+                <div>
+                  <strong>{item.task}</strong>
+                  <span>{item.agent_name} · {item.message_type} · confidence {item.confidence.toFixed(2)}</span>
+                </div>
+                <Badge text={item.status} tone={statusTone(item.status)} />
+              </div>
+            ))}
+          </div>
+        ) : <Empty text="没有协作消息" />}
+      </section>
+
+      {latestRun ? (
+        <section className="detail-section">
+          <h3>Consensus / Evidence</h3>
+          <JsonBlock value={{ consensus: latestRun.consensus, evidence_gaps: latestRun.evidence_gaps }} />
+        </section>
+      ) : null}
     </div>
   )
 }
@@ -139,6 +313,9 @@ export function AgentPage({ context }: { context: AppContextValue }) {
   const [chat, setChat] = useState<ChatMessage[]>([])
   const [reloadToken, setReloadToken] = useState(0)
   const [selectedSessionId, setSelectedSessionId] = useState('')
+  const [detailSession, setDetailSession] = useState<AgentSessionOut | null>(null)
+  const [detailMessage, setDetailMessage] = useState<AgentMessageOut | null>(null)
+  const [detailMemory, setDetailMemory] = useState<AgentMemoryOut | null>(null)
 
   const { data, error, loading } = useApiData<AgentBundle>(async () => {
     const [statusResult, providersResult, sessionsResult, memoryResult] = await Promise.allSettled([
@@ -163,24 +340,12 @@ export function AgentPage({ context }: { context: AppContextValue }) {
   const memory = data?.memory || []
   const partialError = data?.error || error
   const selectedDataset = context.datasets.find((dataset) => dataset.id === context.selectedDataset) || null
-
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) || sessions[0] || null,
     [selectedSessionId, sessions],
   )
   const selectedMessages = selectedSession?.runs.flatMap((run) => run.messages) || []
   const followUps = selectedMessages.filter((item) => Object.keys(item.follow_up_action || {}).length > 0 || !item.resolved)
-
-  const sessionRows = sessions.map((session) => [
-    <button className="primary-btn" type="button" onClick={() => setSelectedSessionId(session.id)}>
-      {session.id.slice(0, 8)}
-    </button>,
-    session.actor,
-    session.message,
-    <Badge text={session.status} tone={statusTone(session.status)} />,
-    session.runs.some((run) => run.llm_used) ? <Badge text="LLM" tone="purple" /> : <Badge text="local" tone="blue" />,
-    <span className="nowrap">{fmtDate(session.created_at)}</span>,
-  ])
 
   const quickPrompts = [
     '读取这个 CSV，概括这批流量的主要风险',
@@ -328,16 +493,10 @@ export function AgentPage({ context }: { context: AppContextValue }) {
                   <Badge text={status.runtime} tone="blue" />
                   <Badge text={status.collaboration_mode} tone="purple" />
                 </div>
-                <div className="meta">
-                  <span>Hermes</span><strong>{String(status.hermes_available)}</strong>
-                  <span>隔离</span><strong>{String(status.hermes_isolated)}</strong>
-                </div>
-                <div className="meta">
-                  <span>最大并行</span><strong>{fmtNumber(status.max_parallelism)}</strong>
-                  <span>需确认</span><strong>{String(status.require_confirmation)}</strong>
-                </div>
-                <div className="meta"><span>角色</span><strong>{status.agent_roles.join(', ') || '—'}</strong></div>
-                <div className="meta"><span>工具</span><strong>{status.allowed_tools.join(', ') || '—'}</strong></div>
+                <div className="meta"><span>Hermes</span><strong>{String(status.hermes_available)}</strong><span>隔离</span><strong>{String(status.hermes_isolated)}</strong></div>
+                <div className="meta"><span>最大并行</span><strong>{fmtNumber(status.max_parallelism)}</strong><span>需确认</span><strong>{String(status.require_confirmation)}</strong></div>
+                <div className="meta"><span>角色</span><strong>{status.agent_roles.join(', ') || '-'}</strong></div>
+                <div className="meta"><span>工具</span><strong>{status.allowed_tools.join(', ') || '-'}</strong></div>
               </div>
             ) : <Empty text="尚未获取 Agent 状态" />}
           </Card>
@@ -371,8 +530,37 @@ export function AgentPage({ context }: { context: AppContextValue }) {
         </aside>
       </div>
 
-      <Card title="Agent 会话列表" description="点击会话可以查看任务图、消息流、二次任务和长期记忆。">
-        {sessionRows.length ? <DataTable caption="Agent 会话" headers={['会话', 'Actor', '消息', '状态', '运行方式', '创建时间']} rows={sessionRows} /> : <Empty text="后端返回空 Agent 会话列表" />}
+      <Card title="Agent 会话" description="按时间倒序展示对话、执行状态和协作证据，点击详细信息查看完整上下文。">
+        {sessions.length ? (
+          <div className="review-list">
+            {sessions.map((session) => {
+              const messageCount = session.runs.reduce((total, run) => total + run.messages.length, 0)
+              return (
+                <article className="review-row" key={session.id}>
+                  <div className="review-row-main">
+                    <div className="review-row-top">
+                      <Badge text={session.id.slice(0, 8)} tone="blue" />
+                      <Badge text={session.status} tone={statusTone(session.status)} />
+                      <Badge text={session.runs.some((run) => run.llm_used) ? 'LLM' : 'local'} tone="purple" />
+                    </div>
+                    <h3>{session.message}</h3>
+                    <p>{session.answer}</p>
+                    <div className="review-row-meta">
+                      <span>{session.actor}</span>
+                      <span>{fmtDate(session.created_at)}</span>
+                      <span>{fmtNumber(session.tool_calls.length)} tools</span>
+                      <span>{fmtNumber(messageCount)} messages</span>
+                    </div>
+                  </div>
+                  <div className="review-row-actions">
+                    <button className="ghost-btn" type="button" onClick={() => setSelectedSessionId(session.id)}>选中</button>
+                    <button className="primary-btn" type="button" onClick={() => setDetailSession(session)}>详细信息</button>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        ) : <Empty text="后端返回空 Agent 会话列表" />}
       </Card>
 
       {selectedSession ? (
@@ -388,7 +576,7 @@ export function AgentPage({ context }: { context: AppContextValue }) {
                     <div className="item-card" key={item.id} style={{ '--accent': item.resolved ? 'var(--color-green)' : 'var(--color-orange)' } as React.CSSProperties}>
                       <div className="meta"><Badge text={item.agent_name} tone="blue" /><Badge text={item.message_type} tone={messageTone(item.message_type)} /></div>
                       <p><strong>{item.task}</strong></p>
-                      <div className="meta"><span>目标</span><strong>{item.recipient || '—'}</strong></div>
+                      <div className="meta"><span>目标</span><strong>{item.recipient || '-'}</strong></div>
                       <div className="meta"><span>动作</span><strong>{JSON.stringify(item.follow_up_action || {})}</strong></div>
                     </div>
                   ))}
@@ -398,13 +586,43 @@ export function AgentPage({ context }: { context: AppContextValue }) {
           </div>
           <div className="grid two">
             <Card title="消息流" description="完整展示角色消息、verification 和 summary。">
-              <MessageFlow messages={selectedMessages} />
+              <MessageFlow messages={selectedMessages} onOpenDetail={setDetailMessage} />
             </Card>
             <Card title="长期记忆" description="展示当前数据集或全局范围内的角色记忆。">
-              <MemoryList memory={memory} />
+              <MemoryList memory={memory} onOpenDetail={setDetailMemory} />
             </Card>
           </div>
         </>
+      ) : null}
+
+      {detailSession ? (
+        <DetailModal
+          title={detailSession.message}
+          subtitle={`${detailSession.actor} · ${fmtDate(detailSession.created_at)} · ${detailSession.runtime}`}
+          onClose={() => setDetailSession(null)}
+        >
+          <AgentSessionDetail session={detailSession} />
+        </DetailModal>
+      ) : null}
+
+      {detailMessage ? (
+        <DetailModal
+          title={detailMessage.task}
+          subtitle={`${detailMessage.agent_name} · ${detailMessage.message_type} · confidence ${detailMessage.confidence.toFixed(2)}`}
+          onClose={() => setDetailMessage(null)}
+        >
+          <AgentMessageDetail message={detailMessage} />
+        </DetailModal>
+      ) : null}
+
+      {detailMemory ? (
+        <DetailModal
+          title={detailMemory.summary}
+          subtitle={`${detailMemory.agent_name} · ${detailMemory.memory_type} · ${fmtDate(detailMemory.updated_at)}`}
+          onClose={() => setDetailMemory(null)}
+        >
+          <AgentMemoryDetail memory={detailMemory} />
+        </DetailModal>
       ) : null}
     </>
   )
