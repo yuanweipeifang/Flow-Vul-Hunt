@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import urllib.request
 from typing import Any
 from uuid import uuid4
 
@@ -22,6 +24,41 @@ from .sessions import store_agent_session
 from .tools import execute_tool
 
 
+# #region debug-point shared:agent-chat-stall
+def _debug_event(hypothesis_id: str, location: str, msg: str, data: dict[str, Any] | None = None) -> None:
+    _payload = {
+        "sessionId": "agent-chat-stall",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "msg": f"[DEBUG] {msg}",
+        "data": data or {},
+    }
+    _url = "http://127.0.0.1:7777/event"
+    _env_path = ".dbg/agent-chat-stall.env"
+    try:
+        with open(_env_path, encoding="utf-8") as _env_file:
+            for _line in _env_file:
+                if _line.startswith("DEBUG_SERVER_URL="):
+                    _url = _line.split("=", 1)[1].strip() or _url
+    except Exception:
+        pass
+    try:
+        urllib.request.urlopen(
+            urllib.request.Request(
+                _url,
+                data=json.dumps(_payload).encode(),
+                headers={"Content-Type": "application/json"},
+            ),
+            timeout=1,
+        ).read()
+    except Exception:
+        pass
+
+
+# #endregion
+
+
 def run_agent_chat(
     request: AgentChatRequest,
     db: Session,
@@ -31,6 +68,19 @@ def run_agent_chat(
 ) -> AgentChatResult:
     settings = settings or get_settings()
     status = agent_status(settings)
+    # #region debug-point A:chat-entry
+    _debug_event(
+        "A",
+        "backend/app/services/agent/chat.py:run_agent_chat:entry",
+        "entered run_agent_chat",
+        {
+            "message_len": len(request.message),
+            "dataset_id": request.dataset_id,
+            "auto_execute": request.auto_execute,
+            "confirmed_tool_call_ids": request.confirmed_tool_call_ids,
+        },
+    )
+    # #endregion
     if not status.hermes_isolated:
         raise HTTPException(status_code=500, detail="Hermes config/plugin directories must stay inside this project")
 
@@ -50,8 +100,33 @@ def run_agent_chat(
         plan, planned, tasks, final_focus = planned_task_graph_fallback(request)
         if not status.hermes_available:
             warning = "Hermes 包尚未安装，当前使用本项目内置 planner；接口和隔离目录已就绪。"
+    # #region debug-point A:planner-output
+    _debug_event(
+        "A",
+        "backend/app/services/agent/chat.py:run_agent_chat:planner",
+        "planner finished",
+        {
+            "planner_used": planner_used,
+            "plan_count": len(plan),
+            "planned_tool_count": len(planned),
+            "task_count": len(tasks),
+            "task_ids": [task.task_id for task in tasks],
+            "task_agents": [task.agent_name for task in tasks],
+            "warning": warning,
+            "final_focus": final_focus,
+        },
+    )
+    # #endregion
 
     orchestrator = AgentOrchestrator(settings)
+    # #region debug-point C:orchestrator-start
+    _debug_event(
+        "C",
+        "backend/app/services/agent/chat.py:run_agent_chat:orchestrator_start",
+        "starting orchestrator execution",
+        {"task_count": len(tasks), "planned_tool_count": len(planned)},
+    )
+    # #endregion
     tool_calls, role_executions, consensus, evidence_gaps, collaboration_answer = orchestrator.execute(
         request=request,
         tasks=tasks,
@@ -60,6 +135,22 @@ def run_agent_chat(
         background_tasks=background_tasks,
         allowed=allowed,
     )
+    # #region debug-point C:orchestrator-finish
+    _debug_event(
+        "C",
+        "backend/app/services/agent/chat.py:run_agent_chat:orchestrator_finish",
+        "orchestrator execution finished",
+        {
+            "tool_call_count": len(tool_calls),
+            "executed_tool_count": len([call for call in tool_calls if call.status == "executed"]),
+            "blocked_tool_count": len([call for call in tool_calls if call.status == "blocked"]),
+            "failed_tool_count": len([call for call in tool_calls if call.status == "failed"]),
+            "role_execution_count": len(role_executions),
+            "role_statuses": {execution.task.task_id: execution.status for execution in role_executions},
+            "evidence_gap_count": len(evidence_gaps),
+        },
+    )
+    # #endregion
     requires_confirmation = any(call.status == "blocked" and call.requires_confirmation for call in tool_calls)
     collaboration_mode = "multi_agent" if settings.agent_collaboration_enabled else "single_planner"
     agents: list[CollaborationMessage] = []
@@ -89,6 +180,21 @@ def run_agent_chat(
         evidence_gaps=evidence_gaps,
         llm_used=llm_used,
     )
+    # #region debug-point B:result-built
+    _debug_event(
+        "B",
+        "backend/app/services/agent/chat.py:run_agent_chat:result",
+        "agent chat result built",
+        {
+            "session_id": session_id,
+            "result_task_graph_count": len(result.task_graph),
+            "agent_message_count": len(result.agents),
+            "requires_confirmation": result.requires_confirmation,
+            "collaboration_mode": result.collaboration_mode,
+            "llm_used": result.llm_used,
+        },
+    )
+    # #endregion
     store_agent_session(db, session_id, actor, request, result, settings, agents if settings.agent_collaboration_enabled else None)
     audit_log(
         db,
@@ -105,6 +211,18 @@ def run_agent_chat(
         },
     )
     db.commit()
+    # #region debug-point B:commit-finished
+    _debug_event(
+        "B",
+        "backend/app/services/agent/chat.py:run_agent_chat:commit",
+        "agent session committed",
+        {
+            "session_id": session_id,
+            "db_session_new": len(db.new),
+            "db_session_dirty": len(db.dirty),
+        },
+    )
+    # #endregion
     return result
 
 

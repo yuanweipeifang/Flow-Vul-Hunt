@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import urllib.request
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -9,6 +11,41 @@ from ...models import AgentMemory, AgentMessage, AgentRun, AgentSession, AgentTo
 from ...schemas import AgentChatRequest, AgentChatResult
 from ...security import Actor
 from .collaboration import CollaborationMessage
+
+
+# #region debug-point shared:agent-chat-stall
+def _debug_event(hypothesis_id: str, location: str, msg: str, data: dict | None = None) -> None:
+    payload = {
+        "sessionId": "agent-chat-stall",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "msg": f"[DEBUG] {msg}",
+        "data": data or {},
+    }
+    url = "http://127.0.0.1:7777/event"
+    env_path = ".dbg/agent-chat-stall.env"
+    try:
+        with open(env_path, encoding="utf-8") as env_file:
+            for line in env_file:
+                if line.startswith("DEBUG_SERVER_URL="):
+                    url = line.split("=", 1)[1].strip() or url
+    except Exception:
+        pass
+    try:
+        urllib.request.urlopen(
+            urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+            ),
+            timeout=1,
+        ).read()
+    except Exception:
+        pass
+
+
+# #endregion
 
 
 def store_agent_session(
@@ -21,6 +58,20 @@ def store_agent_session(
     agents: list[CollaborationMessage] | None = None,
 ) -> None:
     task_graph = [task.model_dump(mode="json") for task in result.task_graph]
+    # #region debug-point B:store-session-start
+    _debug_event(
+        "B",
+        "backend/app/services/agent/sessions.py:store_agent_session:start",
+        "storing agent session",
+        {
+            "session_id": session_id,
+            "result_task_graph_count": len(result.task_graph),
+            "serialized_task_graph_count": len(task_graph),
+            "tool_call_count": len(result.tool_calls),
+            "agent_message_count": len(agents or []),
+        },
+    )
+    # #endregion
     session = AgentSession(
         id=session_id,
         actor=actor.name,
@@ -37,6 +88,18 @@ def store_agent_session(
         requires_confirmation=result.requires_confirmation,
     )
     db.add(session)
+    # #region debug-point B:session-row-added
+    _debug_event(
+        "B",
+        "backend/app/services/agent/sessions.py:store_agent_session:session_row",
+        "agent session row added",
+        {
+            "session_id": session_id,
+            "session_task_graph_count": len(session.task_graph or []),
+            "session_status": session.status,
+        },
+    )
+    # #endregion
     for call in result.tool_calls:
         db.add(
             AgentToolCall(
@@ -68,6 +131,20 @@ def store_agent_session(
             completed_at=utcnow(),
         )
         db.add(run)
+        # #region debug-point B:run-row-added
+        _debug_event(
+            "B",
+            "backend/app/services/agent/sessions.py:store_agent_session:run_row",
+            "agent run row added",
+            {
+                "session_id": session_id,
+                "run_id": run.id,
+                "run_task_graph_count": len(run.task_graph or []),
+                "run_status": run.status,
+                "message_count": len(agents),
+            },
+        )
+        # #endregion
         for message in agents:
             db.add(
                 AgentMessage(
@@ -90,3 +167,16 @@ def store_agent_session(
                     error=message.error,
                 )
             )
+        # #region debug-point B:messages-added
+        _debug_event(
+            "B",
+            "backend/app/services/agent/sessions.py:store_agent_session:messages",
+            "agent messages queued for insert",
+            {
+                "session_id": session_id,
+                "run_id": run.id,
+                "message_ids": [message.id for message in agents],
+                "message_types": [message.message_type for message in agents],
+            },
+        )
+        # #endregion
