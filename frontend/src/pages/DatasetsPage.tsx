@@ -5,6 +5,22 @@ import { Badge, Card, DataTable, Empty, ErrorBox, Loading, PageHeader } from '..
 import { useApiData } from '../useApiData'
 import { fmtDate, fmtNumber, statusTone } from '../ui'
 
+function RecordTable({ title, data, emptyText }: { title: string; data: Record<string, number>; emptyText: string }) {
+  const entries = Object.entries(data || {})
+  return (
+    <section>
+      <h2>{title}</h2>
+      {entries.length ? (
+        <div className="event-markdown-table" role="table" aria-label={title}>
+          {entries.map(([key, value]) => (
+            <div key={key}><span>{key}</span><code>{fmtNumber(value)}</code></div>
+          ))}
+        </div>
+      ) : <Empty text={emptyText} />}
+    </section>
+  )
+}
+
 export function DatasetsPage({ context }: { context: AppContextValue }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
@@ -133,28 +149,47 @@ export function DatasetsPage({ context }: { context: AppContextValue }) {
         </div>
         {compareError ? <div className="section"><ErrorBox error={compareError} /></div> : null}
         {compareResult ? (
-          <div className="section">
+          <article className="event-markdown compare-result">
+            <blockquote>
+              <strong>对比结果</strong>
+              <span>baseline <code>{compareResult.baseline_dataset_id.slice(0, 8)}</code> → candidate <code>{compareResult.candidate_dataset_id.slice(0, 8)}</code></span>
+            </blockquote>
+
             <div className="grid two">
-              <div className="item-card">
-                <h3>统计对比</h3>
-                <pre>{JSON.stringify(compareResult.counts, null, 2)}</pre>
-              </div>
-              <div className="item-card">
-                <h3>风险对比</h3>
-                <pre>{JSON.stringify(compareResult.risk, null, 2)}</pre>
-              </div>
+              <RecordTable title="统计对比" data={compareResult.counts} emptyText="无统计数据" />
+              <RecordTable title="风险对比" data={compareResult.risk} emptyText="无风险数据" />
             </div>
-            <div className="grid two section">
-              <div className="item-card">
-                <h3>新增 Host</h3>
-                {compareResult.new_hosts.length ? <ul>{compareResult.new_hosts.map((host) => <li key={host}>{host}</li>)}</ul> : <Empty text="无新增 Host" />}
-              </div>
-              <div className="item-card">
-                <h3>新增 Path</h3>
-                {compareResult.new_paths.length ? <ul>{compareResult.new_paths.map((path) => <li key={path}>{path}</li>)}</ul> : <Empty text="无新增 Path" />}
-              </div>
+
+            <div className="grid two">
+              <section>
+                <h2>新增 Host</h2>
+                {compareResult.new_hosts.length ? (
+                  <ul>{compareResult.new_hosts.map((host) => <li key={host}><code>{host}</code></li>)}</ul>
+                ) : <Empty text="无新增 Host" />}
+              </section>
+              <section>
+                <h2>新增 Path</h2>
+                {compareResult.new_paths.length ? (
+                  <ul>{compareResult.new_paths.map((path) => <li key={path}><code>{path}</code></li>)}</ul>
+                ) : <Empty text="无新增 Path" />}
+              </section>
             </div>
-          </div>
+
+            <div className="grid two">
+              <section>
+                <h2>新增攻击类型</h2>
+                {compareResult.new_attack_types.length ? (
+                  <ul>{compareResult.new_attack_types.map((type) => <li key={type}><code>{type}</code></li>)}</ul>
+                ) : <Empty text="无新增攻击类型" />}
+              </section>
+              <section>
+                <h2>重复 Payload 哈希</h2>
+                {compareResult.repeated_payload_hashes.length ? (
+                  <ul>{compareResult.repeated_payload_hashes.map((hash) => <li key={hash}><code>{hash}</code></li>)}</ul>
+                ) : <Empty text="无重复 Payload" />}
+              </section>
+            </div>
+          </article>
         ) : null}
       </Card>
     </>

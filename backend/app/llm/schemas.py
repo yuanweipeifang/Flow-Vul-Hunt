@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -84,3 +85,34 @@ class IncidentReportContent(BaseModel):
 
 class ConnectionTestResult(BaseModel):
     status: Literal["ok"]
+
+
+class CVEResearchCandidate(BaseModel):
+    cve_id: str = Field(pattern=r"^CVE-\d{4}-\d{4,}$")
+    product_or_component: str | None = Field(default=None, max_length=256)
+    match_confidence: float = Field(ge=0, le=1)
+    rationale: str = Field(max_length=1600)
+    matching_features: list[str] = Field(default_factory=list, max_length=8)
+    caveats: list[str] = Field(default_factory=list, max_length=6)
+
+
+class CVEResearchQueryPlan(BaseModel):
+    search_queries: list[str] = Field(default_factory=list, max_length=6)
+    known_cve_ids: list[str] = Field(default_factory=list, max_length=20)
+    rationale: str = Field(max_length=1600)
+
+    @field_validator("known_cve_ids")
+    @classmethod
+    def validate_cve_ids(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values if value.strip()]
+        invalid = [value for value in normalized if not re.match(r"^CVE-\d{4}-\d{4,}$", value)]
+        if invalid:
+            raise ValueError(f"invalid CVE IDs: {', '.join(invalid)}")
+        return list(dict.fromkeys(normalized))
+
+
+class CVEResearchResult(BaseModel):
+    summary: str = Field(max_length=2000)
+    candidates: list[CVEResearchCandidate] = Field(default_factory=list, max_length=8)
+    recommended_queries: list[str] = Field(default_factory=list, max_length=8)
+    limitations: list[str] = Field(default_factory=list, max_length=8)

@@ -42,6 +42,36 @@ function severityChipTone(severity: string) {
   return 'blue'
 }
 
+function normalizeSearchValue(value: unknown): string {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function extractCveIds(value: unknown): string[] {
+  const matches = normalizeSearchValue(value).match(/CVE-\d{4}-\d{4,}/gi) || []
+  return Array.from(new Set(matches.map((item) => item.toUpperCase())))
+}
+
+function vulnerabilitySearchText(item: VulnerabilityCandidateOut) {
+  return [
+    item.title,
+    item.candidate_type,
+    item.target_component,
+    item.severity,
+    item.status,
+    item.impact,
+    item.signature,
+    normalizeSearchValue(item.evidence),
+    normalizeSearchValue(item.validation_summary),
+    ...extractCveIds(item.evidence),
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
 function VulnerabilityChip({ tone, title, onClick, children }: { tone: string; title?: string; onClick: () => void; children: ReactNode }) {
   return (
     <button className={`vulnerability-chip ${tone}`} type="button" title={title} onClick={onClick}>
@@ -56,6 +86,7 @@ function MarkdownList({ items, empty }: { items: string[]; empty: string }) {
 
 function VulnerabilityAnalysisDocument({ analysis }: { analysis: VulnerabilityAnalysisOut }) {
   const vulnerability = analysis.vulnerability
+  const cveResearch = (vulnerability.evidence?.cve_research as Record<string, unknown> | undefined) || null
   return (
     <article className="event-markdown vulnerability-markdown">
       <blockquote>
@@ -98,6 +129,13 @@ function VulnerabilityAnalysisDocument({ analysis }: { analysis: VulnerabilityAn
         <MarkdownCode language="json">{JSON.stringify(vulnerability.evidence || {}, null, 2)}</MarkdownCode>
       </section>
 
+      {cveResearch ? (
+        <section>
+          <h2>CVE 研判</h2>
+          <MarkdownCode language="json">{JSON.stringify(cveResearch, null, 2)}</MarkdownCode>
+        </section>
+      ) : null}
+
       <section>
         <h2>验证历史</h2>
         <MarkdownCode language="json">{JSON.stringify(analysis.validation_history || [], null, 2)}</MarkdownCode>
@@ -112,26 +150,35 @@ export function VulnerabilitiesPage({ context }: { context: AppContextValue }) {
   const [analysis, setAnalysis] = useState<VulnerabilityAnalysisOut | null>(null)
   const [detailError, setDetailError] = useState<unknown>(null)
   const [filters, setFilters] = useState({ status: '', severity: '', candidate_type: '' })
+  const [featureQuery, setFeatureQuery] = useState('')
   const [targets, setTargets] = useState<AuthorizedTargetOut[]>([])
   const [validationForm, setValidationForm] = useState({ targetId: '', method: 'HEAD', path: '', probe: 'none' })
   const [validationLoading, setValidationLoading] = useState(false)
   const [validationError, setValidationError] = useState<unknown>(null)
+  const [cveLoading, setCveLoading] = useState(false)
+  const [cveError, setCveError] = useState<unknown>(null)
   const { data: itemsData, error, loading } = useApiData(
     () => context.api<VulnerabilityCandidateOut[]>(`/api/vulnerabilities${queryString({ dataset_id: context.selectedDataset, event_id: eventId, ...filters, limit: 100 })}`),
     [context, context.selectedDataset, eventId, filters],
   )
   const items = itemsData || []
+  const normalizedFeatureQuery = featureQuery.trim().toLowerCase()
+  const visibleItems = useMemo(() => {
+    if (!normalizedFeatureQuery) return items
+    return items.filter((item) => vulnerabilitySearchText(item).includes(normalizedFeatureQuery))
+  }, [items, normalizedFeatureQuery])
   const charts = useMemo(() => ({
-    type: countBy(items, (item) => item.candidate_type),
-    confidence: countBy(items, (item) => confidenceBand(item.confidence)),
-    validation: countBy(items, (item) => validationStage(item.status)),
-  }), [items])
+    type: countBy(visibleItems, (item) => item.candidate_type),
+    confidence: countBy(visibleItems, (item) => confidenceBand(item.confidence)),
+    validation: countBy(visibleItems, (item) => validationStage(item.status)),
+  }), [visibleItems])
 
   async function showAnalysis(id: string) {
     try {
       setAnalysis(null)
       setDetailError(null)
       setValidationError(null)
+      setCveError(null)
       setTargets([])
       setAnalysis(await context.api<VulnerabilityAnalysisOut>(`/api/vulnerabilities/${encodeURIComponent(id)}/analysis`))
     } catch (reason) {
@@ -175,6 +222,21 @@ export function VulnerabilitiesPage({ context }: { context: AppContextValue }) {
     }
   }
 
+  async function runCveResearch() {
+    if (!analysis || cveLoading) return
+    setCveLoading(true)
+    setCveError(null)
+    try {
+      setAnalysis(await context.api<VulnerabilityAnalysisOut>(`/api/vulnerabilities/${encodeURIComponent(analysis.vulnerability.id)}/cve-research`, {
+        method: 'POST',
+      }))
+    } catch (reason) {
+      setCveError(reason)
+    } finally {
+      setCveLoading(false)
+    }
+  }
+
   return (
     <div className="vulnerabilities-page">
       <PageHeader title="漏洞候选" description="集中评估候选漏洞的类型、置信水平、验证进展与关联证据。">
@@ -203,6 +265,10 @@ export function VulnerabilitiesPage({ context }: { context: AppContextValue }) {
             <option value="info">info</option>
           </select>
         </label>
+        <label className="field vulnerability-feature-search">
+          <span>特征 / CVE</span>
+          <input value={featureQuery} onChange={(event) => setFeatureQuery(event.target.value)} placeholder="SSRF、JNDI、组件、CVE-2021-44228" />
+        </label>
       </PageHeader>
 
       {loading ? <Loading /> : error ? <ErrorBox error={error} /> : (
@@ -220,9 +286,9 @@ export function VulnerabilitiesPage({ context }: { context: AppContextValue }) {
           </div>
 
           <Card title="候选列表">
-            {items.length ? (
+            {visibleItems.length ? (
               <div className="vulnerability-list" role="list" aria-label="漏洞候选列表">
-                {items.map((item) => {
+                {visibleItems.map((item) => {
                   const openAnalysis = () => void showAnalysis(item.id)
                   return (
                     <article className="vulnerability-row" role="listitem" key={item.id}>
@@ -239,12 +305,14 @@ export function VulnerabilitiesPage({ context }: { context: AppContextValue }) {
                           <VulnerabilityChip tone="time" onClick={openAnalysis}>创建 {fmtDate(item.created_at)}</VulnerabilityChip>
                         </div>
                       </div>
-                      <button className="ghost-btn vulnerability-analysis-btn" type="button" onClick={openAnalysis}>查看分析</button>
+                      <div className="vulnerability-actions">
+                        <button className="ghost-btn vulnerability-analysis-btn" type="button" onClick={openAnalysis}>查看分析</button>
+                      </div>
                     </article>
                   )
                 })}
               </div>
-            ) : <Empty text="后端返回空漏洞候选列表" />}
+            ) : <Empty text={items.length ? '没有匹配当前漏洞特征或 CVE 关键词的候选' : '后端返回空漏洞候选列表'} />}
             {detailError ? <div className="section"><ErrorBox error={detailError} /></div> : null}
           </Card>
         </>
@@ -266,6 +334,13 @@ export function VulnerabilitiesPage({ context }: { context: AppContextValue }) {
                   </div>
                   <span className="validation-policy-label">白名单 · GET / HEAD / OPTIONS</span>
                 </div>
+                <div className="vulnerability-research-head">
+                  <button className="ghost-btn" type="button" onClick={() => void runCveResearch()} disabled={cveLoading || !analysis}>
+                    {cveLoading ? '研判中…' : '模型研判 CVE'}
+                  </button>
+                  <p>由大模型基于当前候选的特征、证据和关联事件给出 CVE 研判，并写回到本候选分析中。</p>
+                </div>
+                {cveError ? <ErrorBox error={cveError} /> : null}
                 <form className="vulnerability-validation-form" onSubmit={(event) => void runValidation(event)}>
                   <label className="field">
                     <span>授权目标</span>

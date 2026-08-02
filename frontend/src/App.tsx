@@ -52,7 +52,7 @@ function SidebarIcon({ name }: { name: string }) {
 
 function App() {
   const [apiConfig, setApiConfig] = useState<ApiConfig>(() => ({
-    baseUrl: window.location.origin.startsWith('http') ? window.location.origin : defaultApiConfig.baseUrl,
+    baseUrl: defaultApiConfig.baseUrl,
     apiKey: '',
   }))
   const [datasets, setDatasets] = useState<DatasetOut[]>([])
@@ -121,12 +121,12 @@ function App() {
     ['/home', '主页', '🏠'],
     ['/', '系统控制台', '📊'],
     ['/datasets', '数据集管理', '📁'],
+    ['/agent', 'Agent 会话', '🤖'],
     ['/events', 'Payload 事件', '⚡'],
-    ['/incidents', 'Incident 聚类', '🔗'],
     ['/vulnerabilities', '漏洞候选', '🛡️'],
+    ['/incidents', 'Incident 聚类', '🔗'],
     ['/hunt', '狩猎工作台', '🔍'],
     ['/jobs', '任务与审计', '📋'],
-    ['/agent', 'Agent 会话', '🤖'],
   ]
 
   return (

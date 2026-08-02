@@ -6,17 +6,13 @@ import {
   type AgentMemoryOut,
   type AgentMessageOut,
   type AgentSessionOut,
-  type AgentStatusOut,
   type AgentTaskSpecOut,
-  type ProvidersOut,
 } from '../api'
 import { Badge, Card, DetailModal, Empty, ErrorBox, JsonBlock, Loading, PageHeader } from '../components'
 import { useApiData } from '../useApiData'
 import { fmtDate, fmtNumber, statusTone } from '../ui'
 
 interface AgentBundle {
-  status: AgentStatusOut | null
-  providers: ProvidersOut | null
   sessions: AgentSessionOut[]
   memory: AgentMemoryOut[]
   error: unknown | null
@@ -32,11 +28,11 @@ interface ChatMessage {
 
 const agentLooks = [
   { match: 'coordinator', icon: 'hub', label: 'CO', tone: 'cyan', role: '调度', task: '编排任务' },
-  { match: 'triage', icon: 'funnel', label: 'TR', tone: 'orange', role: '分诊', task: '筛选风险' },
-  { match: 'evidence', icon: 'evidence', label: 'EV', tone: 'green', role: '证据', task: '提取证据' },
-  { match: 'hunt', icon: 'radar', label: 'HU', tone: 'purple', role: '狩猎', task: '搜索攻击' },
-  { match: 'planner', icon: 'plan', label: 'PL', tone: 'blue', role: '规划', task: '生成路径' },
-  { match: 'verifier', icon: 'shield', label: 'VE', tone: 'green', role: '验证', task: '核验结论' },
+  { match: 'payload', icon: 'funnel', label: 'PA', tone: 'orange', role: '载荷分析', task: '解析 payload' },
+  { match: 'hunt', icon: 'radar', label: 'HI', tone: 'purple', role: '狩猎解读', task: '解读攻击' },
+  { match: 'vulnerability', icon: 'plan', label: 'VR', tone: 'green', role: '漏洞研究', task: '研究漏洞' },
+  { match: 'evidence', icon: 'shield', label: 'EV', tone: 'green', role: '证据核验', task: '核验证据' },
+  { match: 'report', icon: 'evidence', label: 'RG', tone: 'blue', role: '报告生成', task: '生成报告' },
 ]
 
 function getAgentLook(agent: string, index: number) {
@@ -100,13 +96,15 @@ const STATUS_LEGEND = [
 function TaskGraphCanvas({
   session,
   onSelectTask,
+  highlightAgent,
 }: {
   session: AgentSessionOut
   onSelectTask: (task: AgentTaskSpecOut) => void
+  highlightAgent?: string
 }) {
   const tasks = session.task_graph || []
 
-  const { layers, positions, edges } = useMemo(() => {
+  const { positions, edges, maxCols, nodeScale } = useMemo(() => {
     const depthMap = new Map<string, number>()
     const visiting = new Set<string>()
     const resolve = (taskId: string): number => {
@@ -134,6 +132,7 @@ function TaskGraphCanvas({
 
     const pos = new Map<string, TaskPosition>()
     const layerCount = grouped.length || 1
+    const maxCols = Math.max(...grouped.map((l) => l.length), 1)
     grouped.forEach((layerTasks, depth) => {
       const yPercent = layerCount === 1 ? 50 : ((depth + 0.5) / layerCount) * 100
       const widthPerTask = 100 / Math.max(layerTasks.length, 1)
@@ -152,7 +151,8 @@ function TaskGraphCanvas({
         if (from) e.push({ from, to })
       })
     })
-    return { layers: grouped, positions: pos, edges: e }
+    const nodeScale = layerCount <= 4 ? 1 : layerCount <= 6 ? 0.88 : 0.74
+    return { positions: pos, edges: e, maxCols, nodeScale }
   }, [tasks])
 
   if (!tasks.length) {
@@ -164,7 +164,10 @@ function TaskGraphCanvas({
   }
 
   return (
-    <div className="task-canvas" style={{ minHeight: Math.max(460, layers.length * 140) }}>
+    <div
+      className="task-canvas"
+      style={{ '--max-cols': maxCols, '--node-scale': nodeScale } as React.CSSProperties}
+    >
       <div className="task-canvas-grid" aria-hidden="true" />
       <svg className="task-canvas-edges" viewBox="0 0 100 100" preserveAspectRatio="none">
         {edges.map(({ from, to }, i) => (
@@ -179,17 +182,20 @@ function TaskGraphCanvas({
       {Array.from(positions.values()).map(({ x, y, task }) => {
         const look = getAgentLook(task.agent_name, 0)
         const statusKey = (task.status || 'pending').toLowerCase()
+        const dimmed = !!highlightAgent && task.agent_name !== highlightAgent
+        const highlighted = !!highlightAgent && task.agent_name === highlightAgent
         return (
           <button
             key={task.task_id}
             type="button"
-            className={`task-node tone-${look.tone} status-${statusKey}`}
+            className={`task-node tone-${look.tone} status-${statusKey}${dimmed ? ' dimmed' : ''}${highlighted ? ' highlighted' : ''}`}
             style={{ left: `${x}%`, top: `${y}%` }}
             onClick={() => onSelectTask(task)}
             title={task.goal}
           >
             <div className="task-node-icon">
               <AgentIcon name={look.icon} label={look.role} />
+              <span className="task-node-status-dot" aria-hidden="true" />
             </div>
             <div className="task-node-content">
               <div className="task-node-head">
@@ -517,7 +523,6 @@ function CollapsibleSection({
 }
 
 export function AgentPage({ context }: { context: AppContextValue }) {
-  const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<unknown>(null)
   const [chat, setChat] = useState<ChatMessage[]>([])
@@ -527,26 +532,21 @@ export function AgentPage({ context }: { context: AppContextValue }) {
   const [detailMessage, setDetailMessage] = useState<AgentMessageOut | null>(null)
   const [detailMemory, setDetailMemory] = useState<AgentMemoryOut | null>(null)
   const [detailTask, setDetailTask] = useState<AgentTaskSpecOut | null>(null)
+  const [highlightAgent, setHighlightAgent] = useState('')
 
   const { data, error, loading } = useApiData<AgentBundle>(async () => {
-    const [statusResult, providersResult, sessionsResult, memoryResult] = await Promise.allSettled([
-      context.api<AgentStatusOut>('/api/agent/status'),
-      context.api<ProvidersOut>('/api/llm/providers'),
+    const [sessionsResult, memoryResult] = await Promise.allSettled([
       context.api<AgentSessionOut[]>(`/api/agent/sessions${queryString({ dataset_id: context.selectedDataset, limit: 30 })}`),
       context.api<AgentMemoryOut[]>(`/api/agent/memory${queryString({ dataset_id: context.selectedDataset, limit: 30 })}`),
     ])
-    const failed = [statusResult, providersResult, sessionsResult, memoryResult].find((item) => item.status === 'rejected')
+    const failed = [sessionsResult, memoryResult].find((item) => item.status === 'rejected')
     return {
-      status: statusResult.status === 'fulfilled' ? statusResult.value : null,
-      providers: providersResult.status === 'fulfilled' ? providersResult.value : null,
       sessions: sessionsResult.status === 'fulfilled' ? sessionsResult.value : [],
       memory: memoryResult.status === 'fulfilled' ? memoryResult.value : [],
       error: failed && failed.status === 'rejected' ? failed.reason : null,
     }
   }, [context, context.selectedDataset, reloadToken])
 
-  const status = data?.status || null
-  const providers = data?.providers?.providers || []
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions])
   const memory = data?.memory || []
   const partialError = data?.error || error
@@ -558,19 +558,38 @@ export function AgentPage({ context }: { context: AppContextValue }) {
   const selectedMessages = selectedSession?.runs.flatMap((run) => run.messages) || []
   const followUps = selectedMessages.filter((item) => Object.keys(item.follow_up_action || {}).length > 0 || !item.resolved)
 
-  const quickPrompts = [
-    '读取这个 CSV，概括这批流量的主要风险',
-    '找出最高风险的 payload 和证据',
-    '按攻击类型总结这份数据集',
-    '哪些事件更像误报？',
+  const agentStats = useMemo(() => {
+    const tasks = selectedSession?.task_graph || []
+    const map = new Map<string, { agent: string; tasks: AgentTaskSpecOut[]; messages: AgentMessageOut[] }>()
+    const ensure = (agent: string) => {
+      if (!map.has(agent)) map.set(agent, { agent, tasks: [], messages: [] })
+      return map.get(agent)!
+    }
+    tasks.forEach((t) => ensure(t.agent_name).tasks.push(t))
+    selectedMessages.forEach((m) => ensure(m.agent_name).messages.push(m))
+    return Array.from(map.values())
+  }, [selectedSession, selectedMessages])
+
+  const effectiveHighlight = highlightAgent && agentStats.some((s) => s.agent === highlightAgent) ? highlightAgent : ''
+
+  function selectSession(id: string) {
+    setSelectedSessionId(id)
+    setHighlightAgent('')
+  }
+
+  const candidatePrompts = [
+    { title: '风险概览', text: '读取这个 CSV，概括这批流量的主要风险与攻击类型分布' },
+    { title: '高危 payload', text: '找出最高风险的 payload 及其证据链，并给出攻击判定' },
+    { title: '攻击面总结', text: '按攻击类型总结这份数据集，列出代表性样本与攻击路径' },
+    { title: '误报筛查', text: '哪些事件更像误报？给出依据并建议处置方式' },
+    { title: '漏洞关联', text: '关联 payload 与已知漏洞特征，输出候选漏洞清单' },
   ]
 
-  async function send() {
-    const text = message.trim()
+  async function sendPrompt(prompt: string) {
+    const text = prompt.trim()
     if (!text || sending) return
     setSending(true)
     setSendError(null)
-    setMessage('')
     const now = new Date().toISOString()
     setChat((current) => [...current, { id: `u-${now}`, role: 'user', text, createdAt: now }])
     try {
@@ -625,112 +644,9 @@ export function AgentPage({ context }: { context: AppContextValue }) {
 
       {loading ? <Loading /> : partialError ? <ErrorBox error={partialError} /> : null}
 
-      <div className="grid agent-layout">
-        <Card title="对话窗口" description={selectedDataset ? `当前上下文：${selectedDataset.filename}` : '未选择数据集时，Agent 会先读取可用数据集和 CSV 文件列表。'}>
-          <div className="chat-window">
-            {!chat.length ? (
-              <div className="chat-empty">
-                <strong>问它一句，别让模型闲着。</strong>
-                <span>选中数据集后，Agent 会先调工具收集证据，再结合 hunt、漏洞候选和攻击面结果回答。</span>
-              </div>
-            ) : (
-              chat.map((item) => (
-                <div className={`chat-message ${item.role}`} key={item.id}>
-                  <div className="chat-bubble">
-                    <div className="chat-meta">
-                      <Badge text={item.role === 'user' ? '你' : item.result?.llm_used ? 'LLM Agent' : 'Agent'} tone={item.role === 'user' ? 'blue' : 'purple'} />
-                      <span>{fmtDate(item.createdAt)}</span>
-                    </div>
-                    <div className="chat-text">{item.text}</div>
-                    {item.result?.warning ? <div className="chat-warning">{item.result.warning}</div> : null}
-                    {item.result?.task_graph.length ? (
-                      <details className="tool-details">
-                        <summary>任务图 · {fmtNumber(item.result.task_graph.length)}</summary>
-                        <div className="tool-list">
-                          {item.result.task_graph.map((task) => (
-                            <div className="tool-pill" key={task.task_id}>
-                              <Badge text={task.agent_name} tone="blue" />
-                              <span>{task.goal}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </details>
-                    ) : null}
-                    {item.result?.tool_calls.length ? (
-                      <details className="tool-details">
-                        <summary>工具证据 · {fmtNumber(item.result.tool_calls.length)}</summary>
-                        <div className="tool-list">
-                          {item.result.tool_calls.map((call) => (
-                            <div className="tool-pill" key={call.id}>
-                              <Badge text={call.name} tone={call.status === 'executed' ? 'green' : statusTone(call.status)} />
-                              <span>{call.status}</span>
-                              {call.error ? <small>{call.error}</small> : null}
-                            </div>
-                          ))}
-                        </div>
-                      </details>
-                    ) : null}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          {sendError ? <div className="section"><ErrorBox error={sendError} /></div> : null}
-
-          <div className="quick-prompts">
-            {quickPrompts.map((prompt) => (
-              <button className="ghost-btn" type="button" key={prompt} onClick={() => setMessage(prompt)}>{prompt}</button>
-            ))}
-          </div>
-
-          <form className="chat-input-row" onSubmit={(event) => { event.preventDefault(); void send() }}>
-            <textarea
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              placeholder={selectedDataset ? '问这个 CSV 里的流量，比如：总结主要攻击类型和证据' : '先选数据集，或让 Agent 列出已上传 CSV'}
-              rows={3}
-            />
-            <button className="primary-btn" type="submit" disabled={sending || !message.trim()}>{sending ? '分析中...' : '发送'}</button>
-          </form>
-        </Card>
-
-        <aside className="agent-side">
-          <Card title="Agent 状态">
-            {status ? (
-              <div className="cards-list">
-                <div className="meta">
-                  <Badge text={status.enabled ? 'enabled' : 'disabled'} tone={status.enabled ? 'green' : 'orange'} />
-                  <Badge text={status.runtime} tone="blue" />
-                  <Badge text={status.collaboration_mode} tone="purple" />
-                </div>
-                <div className="meta"><span>Hermes</span><strong>{String(status.hermes_available)}</strong><span>隔离</span><strong>{String(status.hermes_isolated)}</strong></div>
-                <div className="meta"><span>最大并行</span><strong>{fmtNumber(status.max_parallelism)}</strong><span>需确认</span><strong>{String(status.require_confirmation)}</strong></div>
-                <div className="meta"><span>角色</span><strong>{status.agent_roles.join(', ') || '-'}</strong></div>
-                <div className="meta"><span>工具</span><strong>{status.allowed_tools.join(', ') || '-'}</strong></div>
-              </div>
-            ) : <Empty text="尚未获取 Agent 状态" />}
-          </Card>
-
-          <Card title="LLM Provider" description="只展示配置状态，不展示 API Key。">
-            {providers.length ? (
-              <div className="cards-list">
-                {providers.map((provider) => (
-                  <div className="item-card" key={provider.name} style={{ '--accent': provider.configured ? 'var(--color-green)' : 'var(--color-orange)' } as React.CSSProperties}>
-                    <div className="meta"><Badge text={provider.name} tone={provider.configured ? 'green' : 'orange'} /><span>{provider.configured ? '已配置' : '未配置'}</span></div>
-                    <p><strong>模型：</strong>{provider.model}</p>
-                    <p><strong>Base URL：</strong>{provider.base_url}</p>
-                  </div>
-                ))}
-              </div>
-            ) : <Empty text="后端返回空 Provider 列表" />}
-          </Card>
-        </aside>
-      </div>
-
       <Card
-        title={`工作流画布${selectedSession ? ` · ${selectedSession.id.slice(0, 8)}` : ''}`}
-        description="左侧选择会话，右侧按依赖深度分层渲染任务节点；点击节点查看任务详情，下方折叠面板按需展开。"
+        title={`工作流画布与对话${selectedSession ? ` · ${selectedSession.id.slice(0, 8)}` : ''}`}
+        description="会话栏选择历史，画布渲染任务图，右侧对话可直接发起分析；三者高度对齐，切换会话不偏移。"
       >
         <div className="workflow-split">
           <div className="session-rail">
@@ -748,7 +664,7 @@ export function AgentPage({ context }: { context: AppContextValue }) {
                       key={session.id}
                       type="button"
                       className={`session-rail-item${isActive ? ' active' : ''}`}
-                      onClick={() => setSelectedSessionId(session.id)}
+                      onClick={() => selectSession(session.id)}
                     >
                       <div className="session-rail-top">
                         <Badge text={session.id.slice(0, 8)} tone="blue" />
@@ -782,7 +698,7 @@ export function AgentPage({ context }: { context: AppContextValue }) {
                     <button className="primary-btn" type="button" onClick={() => setDetailSession(selectedSession)}>详细信息</button>
                   </div>
                 </div>
-                <TaskGraphCanvas session={selectedSession} onSelectTask={setDetailTask} />
+                <TaskGraphCanvas session={selectedSession} onSelectTask={setDetailTask} highlightAgent={effectiveHighlight || undefined} />
               </>
             ) : (
               <div className="task-canvas task-canvas-empty">
@@ -790,7 +706,145 @@ export function AgentPage({ context }: { context: AppContextValue }) {
               </div>
             )}
           </div>
+
+          <div className="workflow-chat">
+            <div className="workflow-chat-head">
+              <span>对话窗口</span>
+              <small>{selectedDataset ? selectedDataset.filename : '未选择数据集'}</small>
+            </div>
+            <div className="workflow-chat-body">
+              <div className="chat-window">
+                {!chat.length ? (
+                  <div className="chat-empty">
+                    <strong>从下方选一个候选项开始</strong>
+                    <span>选中数据集后，点击候选项即可发起一轮 Agent 协同分析。</span>
+                  </div>
+                ) : (
+                  chat.map((item) => (
+                    <div className={`chat-message ${item.role}`} key={item.id}>
+                      <div className="chat-bubble">
+                        <div className="chat-meta">
+                          <Badge text={item.role === 'user' ? '你' : item.result?.llm_used ? 'LLM Agent' : 'Agent'} tone={item.role === 'user' ? 'blue' : 'purple'} />
+                          <span>{fmtDate(item.createdAt)}</span>
+                        </div>
+                        <div className="chat-text">{item.text}</div>
+                        {item.result?.warning ? <div className="chat-warning">{item.result.warning}</div> : null}
+                        {item.result?.task_graph.length ? (
+                          <details className="tool-details">
+                            <summary>任务图 · {fmtNumber(item.result.task_graph.length)}</summary>
+                            <div className="tool-list">
+                              {item.result.task_graph.map((task) => (
+                                <div className="tool-pill" key={task.task_id}>
+                                  <Badge text={task.agent_name} tone="blue" />
+                                  <span>{task.goal}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        ) : null}
+                        {item.result?.tool_calls.length ? (
+                          <details className="tool-details">
+                            <summary>工具证据 · {fmtNumber(item.result.tool_calls.length)}</summary>
+                            <div className="tool-list">
+                              {item.result.tool_calls.map((call) => (
+                                <div className="tool-pill" key={call.id}>
+                                  <Badge text={call.name} tone={call.status === 'executed' ? 'green' : statusTone(call.status)} />
+                                  <span>{call.status}</span>
+                                  {call.error ? <small>{call.error}</small> : null}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {sendError ? <div className="section"><ErrorBox error={sendError} /></div> : null}
+
+              <div className="candidate-prompts">
+                <div className="candidate-prompts-head">
+                  <span>候选提示词</span>
+                  <small>{sending ? '分析中…' : selectedDataset ? '点击发起一轮新会话' : '未选数据集，可先让 Agent 列出 CSV'}</small>
+                </div>
+                {candidatePrompts.map((prompt) => (
+                  <button
+                    key={prompt.title}
+                    type="button"
+                    className="candidate-prompt"
+                    disabled={sending}
+                    onClick={() => sendPrompt(prompt.text)}
+                  >
+                    <span className="candidate-prompt-title">{prompt.title}</span>
+                    <span className="candidate-prompt-text">{prompt.text}</span>
+                    <span className="candidate-prompt-arrow" aria-hidden="true">↗</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
+
+        {selectedSession && agentStats.length ? (
+          <div className="agent-effectiveness">
+            <div className="agent-effectiveness-head">
+              <span>Agent 工作效果</span>
+              <small>{fmtNumber(agentStats.length)} 个 Agent 协作 · 点击卡片可在画布高亮对应节点</small>
+            </div>
+            <div className="agent-effectiveness-grid">
+              {agentStats.map((stat, i) => {
+                const look = getAgentLook(stat.agent, i)
+                const total = stat.tasks.length
+                const completed = stat.tasks.filter((t) => (t.status || '').toLowerCase() === 'completed').length
+                const running = stat.tasks.filter((t) => (t.status || '').toLowerCase() === 'running').length
+                const failed = stat.tasks.filter((t) => (t.status || '').toLowerCase() === 'failed').length
+                const confidences = stat.messages.map((m) => m.confidence)
+                const avgConf = confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : 0
+                const isActive = effectiveHighlight === stat.agent
+                return (
+                  <button
+                    key={stat.agent}
+                    type="button"
+                    className={`agent-eff-card tone-${look.tone}${isActive ? ' active' : ''}`}
+                    onClick={() => setHighlightAgent(isActive ? '' : stat.agent)}
+                  >
+                    <div className="agent-eff-top">
+                      <span className="agent-eff-icon">
+                        <AgentIcon name={look.icon} label={look.role} />
+                      </span>
+                      <div className="agent-eff-title">
+                        <strong>{look.label}</strong>
+                        <span>{look.role} · {stat.agent}</span>
+                      </div>
+                      {isActive ? <Badge text="高亮中" tone="cyan" /> : null}
+                    </div>
+                    <div className="agent-eff-stats">
+                      <div className="agent-eff-stat"><span>任务</span><strong>{fmtNumber(total)}</strong></div>
+                      <div className="agent-eff-stat"><span>消息</span><strong>{fmtNumber(stat.messages.length)}</strong></div>
+                      <div className="agent-eff-stat"><span>置信度</span><strong>{avgConf.toFixed(2)}</strong></div>
+                    </div>
+                    <div className="agent-eff-bar" aria-hidden="true">
+                      {total ? (
+                        <>
+                          <i style={{ width: `${(completed / total) * 100}%`, background: 'var(--color-green)' }} />
+                          <i style={{ width: `${(running / total) * 100}%`, background: 'var(--color-cyan)' }} />
+                          <i style={{ width: `${(failed / total) * 100}%`, background: 'var(--color-red)' }} />
+                        </>
+                      ) : <i className="empty" style={{ width: '100%' }} />}
+                    </div>
+                    <div className="agent-eff-legend">
+                      <span><i style={{ background: 'var(--color-green)' }} />完成 {completed}</span>
+                      <span><i style={{ background: 'var(--color-cyan)' }} />运行 {running}</span>
+                      <span><i style={{ background: 'var(--color-red)' }} />失败 {failed}</span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ) : null}
 
         {selectedSession ? (
           <div className="workflow-collapsibles">

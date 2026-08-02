@@ -281,18 +281,16 @@ export function HomePage({ context }: { context: AppContextValue }) {
 
   const eventStream = events.map((e, i) => {
     const verdictLabel = e.verdict?.toUpperCase() || 'UNKNOWN'
-    const desc = e.verdict === 'malicious'
-      ? `${verdictLabel} pattern detected`
-      : e.verdict === 'suspicious'
-        ? `${verdictLabel} payload flagged`
-        : e.verdict === 'benign'
-          ? `${verdictLabel} payload ingested`
-          : `${verdictLabel} event processed`
+    const target = `${e.host || '—'}${e.path || ''}`
     return {
       id: e.id,
       time: fmtDate(e.created_at),
-      desc,
-      host: e.host || '—',
+      verdictLabel,
+      method: e.http_method || e.protocol || '—',
+      target,
+      risk: e.risk_score ?? 0,
+      riskPct: Math.min(100, Math.max(0, Math.round(e.risk_score ?? 0))),
+      payloadLength: e.payload_length ?? 0,
       tone: e.verdict === 'malicious' ? 'red' : e.verdict === 'suspicious' ? 'orange' : 'blue',
       delay: i * 0.15,
     }
@@ -335,6 +333,17 @@ export function HomePage({ context }: { context: AppContextValue }) {
             <div className="hero-desc">
               面向 Payload 数据的多引擎检测、证据核验与风险研判平台
             </div>
+            <div className="hero-pills">
+              {[
+                { text: '多引擎检测', accent: 'var(--color-cyan)' },
+                { text: '证据核验', accent: 'var(--color-green)' },
+                { text: '风险研判', accent: 'var(--color-orange)' },
+                { text: 'Agent 协同', accent: 'var(--color-purple)' },
+                { text: '威胁狩猎', accent: 'var(--color-red)' },
+              ].map((pill) => (
+                <span key={pill.text} className="capsule" style={{ '--cap-accent': pill.accent } as React.CSSProperties}>{pill.text}</span>
+              ))}
+            </div>
             <div className="hero-actions">
               <button className="primary-btn hero-cta-primary" type="button" onClick={() => navigate('/')}>
                 进入系统控制台
@@ -374,7 +383,7 @@ export function HomePage({ context }: { context: AppContextValue }) {
       </div>
 
       <div className="capability-grid">
-        {capabilities.map((cap) => (
+        {capabilities.map((cap, i) => (
           <a
             key={cap.to}
             className="capability-card"
@@ -386,7 +395,7 @@ export function HomePage({ context }: { context: AppContextValue }) {
             <h3>{cap.title}</h3>
             <p>{cap.description}</p>
             <div className="capability-meta">
-              <span className="badge blue">模块</span>
+              <span className="capsule">MODULE {String(i + 1).padStart(2, '0')}</span>
               <span className="enter-link">进入模块</span>
             </div>
           </a>
@@ -441,17 +450,28 @@ export function HomePage({ context }: { context: AppContextValue }) {
         <div className="event-stream">
           {streamItems ? (
             <div className="stream-list">
-              {streamItems.map((evt, idx) => (
+              {streamItems.map((evt) => (
                 <div
                   key={evt.id}
                   className={`stream-item tone-${evt.tone}`}
                   style={{ animationDelay: `${evt.delay}s` }}
                 >
-                  <span className="stream-time">{evt.time}</span>
-                  <span className="stream-bar" />
-                  <span className="stream-desc">{evt.desc}</span>
-                  <span className="stream-host">{evt.host}</span>
-                  {idx < streamItems.length - 1 && <span className="stream-connector" />}
+                  <div className="stream-head">
+                    <span className={`capsule stream-verdict tone-${evt.tone}`}>{evt.verdictLabel}</span>
+                    <span className="stream-time">{evt.time}</span>
+                  </div>
+                  <div className="stream-main">
+                    <span className="stream-method">{evt.method}</span>
+                    <span className="stream-target" title={evt.target}>{evt.target}</span>
+                  </div>
+                  <div className="stream-stats">
+                    <div className="stream-risk" title={`风险分 ${evt.risk}`}>
+                      <span className="stream-risk-label">RISK</span>
+                      <div className="stream-risk-bar"><span style={{ width: `${evt.riskPct}%` }} /></div>
+                      <strong>{evt.risk.toFixed(1)}</strong>
+                    </div>
+                    <span className="stream-len" title="Payload 大小">{fmtNumber(evt.payloadLength)} B</span>
+                  </div>
                 </div>
               ))}
             </div>

@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react'
+import React, { useState } from 'react'
 import type { AppContextValue } from '../App'
 import { queryString, type DashboardOverview } from '../api'
 import { Card, ErrorBox, Loading, PageHeader } from '../components'
@@ -48,11 +48,11 @@ const activityRanges: Record<ActivityRange, { label: string; primary: number[]; 
 }
 const agentLooks = [
   { match: 'coordinator', icon: 'hub', label: 'CO', tone: 'cyan', role: '调度', task: '编排任务' },
-  { match: 'triage', icon: 'funnel', label: 'TR', tone: 'orange', role: '分诊', task: '筛选风险' },
-  { match: 'evidence', icon: 'evidence', label: 'EV', tone: 'green', role: '证据', task: '提取证据' },
-  { match: 'hunt', icon: 'radar', label: 'HU', tone: 'purple', role: '狩猎', task: '搜索攻击' },
-  { match: 'planner', icon: 'plan', label: 'PL', tone: 'blue', role: '规划', task: '生成路径' },
-  { match: 'verifier', icon: 'shield', label: 'VE', tone: 'green', role: '验证', task: '核验结论' },
+  { match: 'payload', icon: 'funnel', label: 'PA', tone: 'orange', role: '载荷分析', task: '解析 payload' },
+  { match: 'hunt', icon: 'radar', label: 'HI', tone: 'purple', role: '狩猎解读', task: '解读攻击' },
+  { match: 'vulnerability', icon: 'plan', label: 'VR', tone: 'green', role: '漏洞研究', task: '研究漏洞' },
+  { match: 'evidence', icon: 'shield', label: 'EV', tone: 'green', role: '证据核验', task: '核验证据' },
+  { match: 'report', icon: 'evidence', label: 'RG', tone: 'blue', role: '报告生成', task: '生成报告' },
 ]
 
 function getAgentLook(agent: string, index: number) {
@@ -240,7 +240,7 @@ function SideDistribution({ title, data, accent, compact = false }: { title: str
 }
 function AgentSandbox({ routes, health }: { routes: Record<string, string[]>; health: AppContextValue['health'] }) {
   const routeEntries = Object.entries(routes)
-  const fallbackAgents = ['coordinator', 'triage_agent', 'evidence_verifier', 'hunt_agent']
+  const fallbackAgents = ['coordinator', 'payload_analyst', 'hunt_interpreter', 'vulnerability_researcher', 'evidence_verifier', 'report_generator']
   const agents = (routeEntries.length ? routeEntries.map(([agent]) => agent) : fallbackAgents).slice(0, 6)
   const healthy = health?.status === 'ok' && health.database_writable
 

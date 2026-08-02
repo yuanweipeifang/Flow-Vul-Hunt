@@ -13,6 +13,7 @@ from app.api.datasets import analyze_datasets_batch
 from app.api.agent import confirm_agent_session_tools
 from app.api.hunting import hunt, run_saved_hunt_query, save_hunt_query
 from app.api.vulnerabilities import analyze_vulnerability
+from app.api.vulnerabilities import research_vulnerability_cves
 from app.api.vulnerabilities import group_vulnerabilities
 from app.audit import audit_log
 from app.config import Settings
@@ -23,8 +24,10 @@ from app.request_context import actor_var, request_id_var, role_var
 from app.schemas import AgentChatRequest, AgentConfirmRequest, BatchAnalyzeRequest, CustomRuleCreate, HuntRequest, SavedHuntQueryCreate
 from app.security import Actor, require_roles
 from app.services.analysis_service import analyze_event, mark_stuck_jobs
+from app.llm.gateway import GatewayResult
 from app.services.agent import agent_status, hermes_smoke_check, run_agent_chat
 from app.services.dataset_service import ingest_dataset
+from app.llm.schemas import CVEResearchCandidate, CVEResearchQueryPlan, CVEResearchResult
 from app.services.rule_service import dry_run_custom_rule
 from app.services.vulnerability_service import ensure_event_vulnerability_analysis
 
@@ -611,6 +614,132 @@ def test_vulnerability_analysis_view_includes_triage_context(db_session) -> None
     assert result.related_event.id == event.id
     assert "命中内网地址参数" in result.confidence_factors
     assert result.false_positive_risks
+
+
+def test_vulnerability_cve_research_is_written_back_into_evidence(db_session, monkeypatch) -> None:
+    dataset = Dataset(name="v", filename="v.csv", file_sha256="f" * 64, row_count=1, status="ready")
+    db_session.add(dataset)
+    db_session.flush()
+    event = PayloadEvent(
+        dataset_id=dataset.id,
+        row_number=1,
+        raw_payload="GET /vuln?name=${jndi:ldap://x} HTTP/1.1",
+        decoded_payload="GET /vuln?name=${jndi:ldap://x} HTTP/1.1",
+        payload_hash="7" * 64,
+        risk_score=92,
+        verdict="suspicious",
+    )
+    db_session.add(event)
+    db_session.flush()
+    candidate = VulnerabilityCandidate(
+        dataset_id=dataset.id,
+        event_id=event.id,
+        candidate_type="jndi_injection",
+        title="JNDI injection candidate",
+        target_component="search endpoint",
+        severity="critical",
+        confidence=0.93,
+        status="candidate",
+        signature="s-cve",
+        evidence={"signals": ["jndi", "ldap"]},
+        impact="possible code execution",
+        validation_summary={},
+    )
+    db_session.add(candidate)
+    db_session.commit()
+
+    fake_plan = CVEResearchQueryPlan(
+        search_queries=["log4j jndi ldap"],
+        known_cve_ids=[],
+        rationale="JNDI LDAP payload suggests Log4Shell-style CVE search.",
+    )
+    fake_result = CVEResearchResult(
+        summary="Likely Log4Shell-family issue",
+        candidates=[
+            CVEResearchCandidate(
+                cve_id="CVE-2021-44228",
+                product_or_component="log4j",
+                match_confidence=0.93,
+                rationale="JNDI LDAP payload aligns with Log4Shell class behavior.",
+                matching_features=["jndi", "ldap"],
+                caveats=["Model-only research; verify against real advisories."],
+            )
+        ],
+        recommended_queries=["log4j jndi ldap CVE-2021-44228"],
+        limitations=["model_prior_not_live_search"],
+    )
+
+    class FakeGateway:
+        calls = 0
+
+        def complete_json(self, *_args, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return GatewayResult(
+                    data=fake_plan,
+                    provider_name="deepseek",
+                    model_name="test-model",
+                    request_hash="query-hash",
+                    token_usage={},
+                    latency_ms=1,
+                )
+            return GatewayResult(
+                data=fake_result,
+                provider_name="deepseek",
+                model_name="test-model",
+                request_hash="hash",
+                token_usage={},
+                latency_ms=1,
+            )
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "totalResults": 1,
+                "vulnerabilities": [
+                    {
+                        "cve": {
+                            "id": "CVE-2021-44228",
+                            "published": "2021-12-10T10:15:00.000",
+                            "lastModified": "2024-11-21T12:00:00.000",
+                            "vulnStatus": "Modified",
+                            "descriptions": [{"lang": "en", "value": "Apache Log4j JNDI remote code execution."}],
+                            "metrics": {},
+                            "weaknesses": [{"description": [{"value": "CWE-20"}]}],
+                            "references": {"referenceData": [{"url": "https://example.test/cve", "source": "test"}]},
+                        }
+                    }
+                ],
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.requests = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _url, params):
+            self.requests.append(params)
+            return FakeResponse()
+
+    fake_gateway = FakeGateway()
+    monkeypatch.setattr("app.services.cve_research_service.LLMGateway", lambda: fake_gateway)
+    monkeypatch.setattr("app.services.cve_research_service.httpx.Client", FakeClient)
+
+    result = research_vulnerability_cves(candidate.id, db_session, Actor("api_key:analyst", "analyst", True))
+
+    assert result.vulnerability.evidence["cve_research"]["candidates"][0]["cve_id"] == "CVE-2021-44228"
+    assert result.vulnerability.evidence["cve_research"]["live_cve_search"]["records"][0]["id"] == "CVE-2021-44228"
+    refreshed = db_session.get(VulnerabilityCandidate, candidate.id)
+    assert refreshed is not None
+    assert refreshed.evidence["cve_research"]["knowledge_scope"] == "live_nvd_search_plus_llm_synthesis"
 
 
 def test_agent_chat_result_keeps_task_graph_and_fallback_answer(db_session) -> None:

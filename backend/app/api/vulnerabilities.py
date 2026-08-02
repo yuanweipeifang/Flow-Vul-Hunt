@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..audit import audit_log
 from ..database import get_db
+from ..llm.gateway import LLMResponseError, LLMUnavailableError
 from ..models import AuthorizedTarget, PayloadEvent, ValidationRun, VulnerabilityCandidate
 from ..schemas import (
     ValidationRunOut,
@@ -13,6 +14,7 @@ from ..schemas import (
     VulnerabilityCandidateUpdate,
     VulnerabilityValidateRequest,
 )
+from ..services.cve_research_service import CVESearchError, research_cves_for_vulnerability, save_cve_research
 from ..services.validation_service import ValidationPolicyError, create_validation_run
 from ..security import Actor, get_actor, require_roles
 from ..services.event_mapper import event_summary
@@ -67,6 +69,19 @@ def _analysis_summary(vulnerability: VulnerabilityCandidate) -> str:
     return (
         f"{vulnerability.title}，当前状态为 {vulnerability.status}，"
         f"置信度 {vulnerability.confidence:.2f}，影响判断：{vulnerability.impact}"
+    )
+
+
+def _analysis_out(vulnerability: VulnerabilityCandidate) -> VulnerabilityAnalysisOut:
+    validation_focus = (vulnerability.evidence or {}).get("recommended_validation_steps") or []
+    return VulnerabilityAnalysisOut(
+        vulnerability=vulnerability,
+        analysis_summary=_analysis_summary(vulnerability),
+        confidence_factors=_confidence_factors(vulnerability),
+        false_positive_risks=_false_positive_risks(vulnerability),
+        validation_focus=validation_focus,
+        related_event=event_summary(vulnerability.event),
+        validation_history=vulnerability.validation_runs,
     )
 
 
@@ -176,16 +191,44 @@ def analyze_vulnerability(
     )
     if not vulnerability:
         raise HTTPException(status_code=404, detail="vulnerability candidate not found")
-    validation_focus = (vulnerability.evidence or {}).get("recommended_validation_steps") or []
-    return VulnerabilityAnalysisOut(
-        vulnerability=vulnerability,
-        analysis_summary=_analysis_summary(vulnerability),
-        confidence_factors=_confidence_factors(vulnerability),
-        false_positive_risks=_false_positive_risks(vulnerability),
-        validation_focus=validation_focus,
-        related_event=event_summary(vulnerability.event),
-        validation_history=vulnerability.validation_runs,
+    return _analysis_out(vulnerability)
+
+
+@router.post("/{vulnerability_id}/cve-research", response_model=VulnerabilityAnalysisOut)
+def research_vulnerability_cves(
+    vulnerability_id: str,
+    db: Session = Depends(get_db),
+    _actor: Actor = Depends(require_roles("admin", "analyst")),
+) -> VulnerabilityAnalysisOut:
+    vulnerability = db.scalar(
+        select(VulnerabilityCandidate)
+        .where(VulnerabilityCandidate.id == vulnerability_id)
+        .options(
+            selectinload(VulnerabilityCandidate.event).selectinload(PayloadEvent.findings),
+            selectinload(VulnerabilityCandidate.validation_runs).selectinload(ValidationRun.results),
+        )
     )
+    if not vulnerability:
+        raise HTTPException(status_code=404, detail="vulnerability candidate not found")
+    try:
+        research = research_cves_for_vulnerability(vulnerability)
+    except LLMUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMResponseError as exc:
+        raise HTTPException(status_code=502, detail=f"CVE research failed: {exc}") from exc
+    except CVESearchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    save_cve_research(vulnerability, research)
+    audit_log(
+        db,
+        "vulnerability.cve_research",
+        "vulnerability",
+        vulnerability_id,
+        {"provider": research.get("provider"), "model": research.get("model")},
+    )
+    db.commit()
+    db.refresh(vulnerability)
+    return _analysis_out(vulnerability)
 
 
 @router.patch("/{vulnerability_id}", response_model=VulnerabilityCandidateOut)
